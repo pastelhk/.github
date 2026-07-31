@@ -98,12 +98,13 @@ jobs:
               const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
               if (s >= 0 && e > s) {
                 const lines = existing.body.slice(s + LOG_START.length, e)
-                  .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+                  .split('\n').map(l => l.trim())
+                  .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
                 if (lines.length) {
                   logBlock =
                     `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
-                    `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
-                    `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+                    `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                    `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
                 }
               }
             }
@@ -359,7 +360,8 @@ jobs:
                 const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
                 if (s >= 0 && e > s) {
                   lines = existing.body.slice(s + LOG_START.length, e)
-                    .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+                    .split('\n').map(l => l.trim())
+                    .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
                 }
               }
               lines.unshift(newLine);          // newest on top
@@ -367,8 +369,8 @@ jobs:
 
               const logBlock =
                 `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
-                `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
-                `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+                `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
 
               const body = `${MARKER}\n${currentBlock}${logBlock}`;
 
@@ -410,12 +412,13 @@ jobs:
             const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
             if (s >= 0 && e > s) {
               const lines = existing.body.slice(s + LOG_START.length, e)
-                .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+                .split('\n').map(l => l.trim())
+                .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
               if (lines.length) {
                 logBlock =
                   `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
-                  `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
-                  `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+                  `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                  `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
               }
             }
 
