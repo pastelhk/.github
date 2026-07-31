@@ -1,0 +1,72 @@
+name: Bug report
+description: A defect in a library or internal engineering repo.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste secrets, tokens, connection strings or real client data — this repo may be public.
+
+  - type: input
+    id: package
+    attributes:
+      label: Package / app and version
+      description: Package name plus version or commit SHA where you saw it.
+      placeholder: '@pasteltech/eslint-config-base 3.2.1 (or commit a153210)'
+    validations:
+      required: true
+
+  - type: input
+    id: path
+    attributes:
+      label: File or path
+      description: Where in the source you believe the fault sits, if known.
+      placeholder: 'src/parse/schema-boundary.ts'
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, from a clean checkout. A minimal repro beats a description.
+      placeholder: |
+        1. npm ci
+        2. npm run check:types
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+      description: State both. "It doesn't work" is not an actual.
+      placeholder: |
+        Expected: ...
+        Actual:   ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround in place
+      description: Anything currently masking this, so the fix does not silently break it. Write "None" if there is none.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Failing CI run link, stack trace, screenshot or recording.
+      render: shell
+
+  - type: checkboxes
+    id: triage
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues, including closed ones.
+          required: true
+        - label: No secrets, tokens or real client data are included above.
+          required: true
