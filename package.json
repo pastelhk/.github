@@ -1,0 +1,23 @@
+{
+  "name": "pastelhk-github",
+  "version": "1.0.0",
+  "description": "Shared GitHub Actions, reusable workflows and community health files for the Pastel organisation.",
+  "private": true,
+  "type": "module",
+  "author": "Pastel Tech <info@pastel.com.hk>",
+  "license": "MIT",
+  "repository": "pastelhk/.github.git",
+  "scripts": {
+    "check:format": "prettier -c .",
+    "check:packages": "syncpack lint",
+    "clean": "",
+    "fix:format": "prettier --write .",
+    "fix:packages": "syncpack format && syncpack fix"
+  },
+  "prettier": "@pasteltech/prettierrc",
+  "devDependencies": {
+    "@pasteltech/prettierrc": "^1.3.0",
+    "prettier": "^3.9.6",
+    "syncpack": "^15.3.2"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "./node_modules/syncpack/schema.json",
+  "indent": "  ",
+  "sortAz": [
+    "contributors",
+    "dependencies",
+    "devDependencies",
+    "keywords",
+    "peerDependencies",
+    "scripts"
+  ],
+  "sortFirst": [
+    "name",
+    "version",
+    "description",
+    "type",
+    "private",
+    "workspaces",
+    "author",
+    "license",
+    "repository",
+    "homepage",
+    "bugs",
+    "keywords",
+    "exports",
+    "main",
+    "module",
+    "types",
+    "browser",
+    "sideEffects",
+    "files",
+    "bin",
+    "scripts",
+    "eslintConfig",
+    "prettier",
+    "dependencies",
+    "peerDependencies",
+    "devDependencies"
+  ],
+  "source": ["package.json", "apps/*/package.json", "packages/*/package.json"],
+  "semverGroups": [
+    {
+      "label": "Internal workspace packages",
+      "dependencies": ["$LOCAL"],
+      "dependencyTypes": ["prod", "dev"],
+      "range": ""
+    }
+  ],
+  "versionGroups": [
+    {
+      "dependencies": ["@types/**"],
+      "dependencyTypes": ["!dev"],
+      "isBanned": true,
+      "label": "@types packages should only be under devDependencies"
+    },
+    {
+      "dependencies": [
+        "prettier",
+        "eslint*",
+        "typescript*",
+        "@typescript-eslint/**"
+      ],
+      "dependencyTypes": ["!dev"],
+      "isBanned": true,
+      "label": "Code style packages should only be under devDependencies"
+    },
+    {
+      "dependencyTypes": ["peer"],
+      "isIgnored": true
+    }
+  ]
+}
