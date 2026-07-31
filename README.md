@@ -45,8 +45,6 @@ once. They are **not** inherited and do **not** receive updates.
 
 ### Conventions that apply to every caller
 
-​
-
 - **`permissions:` is mandatory on the calling job.** A called workflow can only
   _downgrade_ the token it receives, never elevate it. Omit the block and the job
   inherits the repository default, which is read-only in hardened organisations —
@@ -63,8 +61,6 @@ once. They are **not** inherited and do **not** receive updates.
   ​
 
 ## Reusable workflows
-
-​
 
 ### `code-scan.yml`
 
@@ -157,12 +153,11 @@ Approves and enables auto-merge for Dependabot pull requests.
 **Inputs**
 ​
 
-| Input           | Type    | Default | Description                           |
-| --------------- | ------- | ------- | ------------------------------------- |
-| `allow-minor`   | boolean | `false` | Also auto-merge minor version updates |
-| ​               |
-| **Caller stub** |
-| ​               |
+| Input         | Type    | Default | Description                           |
+| ------------- | ------- | ------- | ------------------------------------- |
+| `allow-minor` | boolean | `false` | Also auto-merge minor version updates |
+
+**Caller stub**
 
 ```yaml
 name: Dependabot auto-merge
@@ -199,25 +194,23 @@ Prerequisites that fail silently if missed:
 Publishes packages and pushes any generated tags and versions.
 ​
 **Inputs**
-​
 
-| Input                                   | Type     | Default         | Description                                                  |
-| --------------------------------------- | -------- | --------------- | ------------------------------------------------------------ |
-| `args`                                  | string   | `""`            | Extra arguments passed to `npm run publish`                  |
-| `runs-on`                               | string   | `ubuntu-latest` | Runner label. Use `macos-latest` only when Xcode is required |
-| ​                                       |
-| **Secrets and variables**               |
-| ​                                       |
-| Name                                    | Type     | Required        | Description                                                  |
-| --------------------------------------- | -------- | --------        | --------------------------------------------                 |
-| `PUBLISH_APP_PRIVATE_KEY`               | secret   | Yes             | GitHub App private key for publishing                        |
-| `PUBLISH_APP_ID`                        | variable | Yes             | GitHub App ID for publishing                                 |
-| `PRIVATE_NPM_REGISTRY_PASSWORD`         | secret   | No              | Private npm registry password                                |
-| `PRIVATE_NPM_REGISTRY_PUBLISH_USERNAME` | variable | No              | Private npm registry username for publishing                 |
-| `PRIVATE_NPM_REGISTRY_URL`              | variable | No              | Private npm registry host                                    |
-| ​                                       |
-| **Caller stub**                         |
-| ​                                       |
+| Input     | Type   | Default         | Description                                                  |
+| --------- | ------ | --------------- | ------------------------------------------------------------ |
+| `args`    | string | `""`            | Extra arguments passed to `npm run publish`                  |
+| `runs-on` | string | `ubuntu-latest` | Runner label. Use `macos-latest` only when Xcode is required |
+
+**Secrets and variables**
+
+| Name                                    | Type     | Required | Description                                  |
+| --------------------------------------- | -------- | -------- | -------------------------------------------- |
+| `PUBLISH_APP_PRIVATE_KEY`               | secret   | Yes      | GitHub App private key for publishing        |
+| `PUBLISH_APP_ID`                        | variable | Yes      | GitHub App ID for publishing                 |
+| `PRIVATE_NPM_REGISTRY_PASSWORD`         | secret   | No       | Private npm registry password                |
+| `PRIVATE_NPM_REGISTRY_PUBLISH_USERNAME` | variable | No       | Private npm registry username for publishing |
+| `PRIVATE_NPM_REGISTRY_URL`              | variable | No       | Private npm registry host                    |
+
+**Caller stub**
 
 ```yaml
 name: Publish
@@ -242,42 +235,35 @@ jobs:
       PRIVATE_NPM_REGISTRY_PASSWORD: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 ```
 
-​
-
 ## Composite actions
-
-​
 
 ### `npm-init`
 
-​
 Sets up Node from `.nvmrc`, enables Corepack when the project declares
 `packageManager`, writes registry authentication and optionally installs
 dependencies.
 ​
 
-| Input                                                                             | Default  | Description                                                       |
-| --------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------- |
-| `shell`                                                                           | `bash`   | Shell used for the action's `run` steps                           |
-| `restore-packages`                                                                | `'true'` | Run `npm ci` after setup                                          |
-| `registry-url`                                                                    | —        | Private registry URL. Scheme optional; auth is skipped when empty |
-| `registry-username`                                                               | —        | Private registry username                                         |
-| `registry-password`                                                               | —        | Private registry password or token                                |
-| ​                                                                                 |
-| **Contract to be aware of:** the action writes `.npmrc` to `$RUNNER_TEMP` and     |
-| exports `NPM_CONFIG_USERCONFIG` into `$GITHUB_ENV`. Registry auth therefore       |
-| applies to **every subsequent step in the calling job**, not just steps inside    |
-| the action, and the repository working tree is never modified. Do not "simplify"  |
-| this by writing `.npmrc` into the checkout — that reintroduces false positives in |
-| the lock-file drift check.                                                        |
-| ​                                                                                 |
+| Input               | Default  | Description                                                       |
+| ------------------- | -------- | ----------------------------------------------------------------- |
+| `shell`             | `bash`   | Shell used for the action's `run` steps                           |
+| `restore-packages`  | `'true'` | Run `npm ci` after setup                                          |
+| `registry-url`      | —        | Private registry URL. Scheme optional; auth is skipped when empty |
+| `registry-username` | —        | Private registry username                                         |
+| `registry-password` | —        | Private registry password or token                                |
+
+**Contract to be aware of:** the action writes `.npmrc` to `$RUNNER_TEMP` and
+exports `NPM_CONFIG_USERCONFIG` into `$GITHUB_ENV`. Registry auth therefore
+applies to **every subsequent step in the calling job**, not just steps inside
+the action, and the repository working tree is never modified. Do not "simplify"
+this by writing `.npmrc` into the checkout — that reintroduces false positives in
+the lock-file drift check.  
+​
 
 ### `scan-comment`
 
-​
 Creates and updates the sticky pull request comment used by `code-scan.yml`.
 Not intended to be called directly.
-​
 
 ## Starter workflow templates
 
@@ -286,7 +272,6 @@ Files in `workflow-templates/` appear under **Actions → New workflow** in
 repositories across the organisation. Selecting one copies it into that
 repository's `.github/workflows/` directory. There is no link back to this
 repository afterwards, so later fixes here do **not** reach copies.
-​
 
 > **Limitation:** workflow templates created by an organisation can only be used
 > in **public** repositories unless the organisation is on GitHub Enterprise
@@ -306,9 +291,7 @@ repository afterwards, so later fixes here do **not** reach copies.
 
 ## Config templates
 
-​
 These are **not** workflows and must not be copied into `.github/workflows/`.
-​
 
 | File                       | Copy to                  | Purpose                                                 |
 | -------------------------- | ------------------------ | ------------------------------------------------------- |
@@ -342,8 +325,6 @@ Both `pastelhk` and `pasteltech` need the same variables and secrets.
 ​
 
 ## Versioning
-
-​
 
 - `v1` is a moving major tag; patches and backwards-compatible changes are
   retagged onto it.
