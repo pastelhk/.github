@@ -1,0 +1,37 @@
+name: Dependabot auto-merge
+
+on:
+  workflow_call:
+    inputs:
+      allow-minor:
+        description: 'Also auto-merge minor version updates'
+        type: boolean
+        default: false
+
+jobs:
+  dependabot:
+    name: Dependabot Auto-Merge
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: '${{ secrets.GITHUB_TOKEN }}'
+
+      - name: Approve & enable auto-merge
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || (inputs.allow-minor && steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr comment "$PR_URL" --body "✅ Auto-merge enabled for ${UPDATE_TYPE} update"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

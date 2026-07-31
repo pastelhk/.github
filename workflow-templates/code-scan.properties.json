@@ -1,0 +1,6 @@
+{
+  "name": "Code Scan (Pastel)",
+  "description": "Lockfile, hoisting, audit, format, types, lint, tests, SonarQube.",
+  "iconName": "octicon shield-check",
+  "categories": ["Continuous integration", "TypeScript", "npm"]
+}

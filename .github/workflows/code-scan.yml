@@ -1,0 +1,425 @@
+name: Code Scan
+
+concurrency:
+  group: code-scan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_call:
+    inputs:
+      run-packages:
+        description: 'Run package.json check (npm run check:packages)'
+        type: boolean
+        default: true
+      run-format:
+        description: 'Run format check (npm run check:format)'
+        type: boolean
+        default: true
+      run-types:
+        description: 'Run type check (npm run check:types)'
+        type: boolean
+        default: true
+      run-lint:
+        description: 'Run lint check (npm run check:lint)'
+        type: boolean
+        default: true
+      run-tests:
+        description: 'Run tests (npm run check:test)'
+        type: boolean
+        default: true
+      run-audit:
+        description: 'Run npm audit'
+        type: boolean
+        default: true
+      run-sonar:
+        description: 'Run SonarQube scan'
+        type: boolean
+        default: true
+      run-hoisting:
+        description: 'Verify package hoisting in workspaces'
+        type: boolean
+        default: true
+      pr-comment:
+        description: 'Post/update the sticky PR comment (needs pull-requests: write on the caller job)'
+        type: boolean
+        default: true
+      timeout:
+        description: 'Timeout in minutes for the entire job'
+        type: number
+        default: 12
+    secrets:
+      SONAR_TOKEN:
+        required: false
+      PRIVATE_NPM_REGISTRY_PASSWORD:
+        required: false
+
+jobs:
+  scan:
+    name: Code Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: Post pending comment
+        if: ${{ github.event_name == 'pull_request' && inputs.pr-comment }}
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          PR_COMMENT: ${{ inputs.pr-comment }}
+        with:
+          script: |
+            const MARKER = '<!-- code-scan-report -->';
+            const LOG_START = '<!-- log-start -->';
+            const LOG_END = '<!-- log-end -->';
+
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const shortSha = sha.slice(0, 7);
+            const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${sha}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const startedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) + ' HKT';
+
+            const runningBlock =
+              `## 📋 Code Scan Results\n\n⏳ **Running…** — [#${context.runNumber}](${runUrl})` +
+              `\n\n<sub>Commit [\`${shortSha}\`](${commitUrl}) · Started ${startedAt}</sub>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.includes(MARKER));
+
+            // carry prior run-log rows forward untouched (no new line yet — run isn't done)
+            let logBlock = '';
+            if (existing) {
+              const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
+              if (s >= 0 && e > s) {
+                const lines = existing.body.slice(s + LOG_START.length, e)
+                  .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+                if (lines.length) {
+                  logBlock =
+                    `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
+                    `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                    `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+                }
+              }
+            }
+
+            const body = `${MARKER}\n${runningBlock}${logBlock}`;
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pastelhk/.github/.github/actions/npm-init@v1
+        with:
+          restore-packages: false
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+      # Intentionally use `npm install` instead of `npm ci` to detect updates to lock file
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check lock file clean
+        id: check-lockfile
+        run: |
+          if ! git --no-pager diff --exit-code; then
+            echo "::error::package-lock.json drifted. Run 'npm install' locally and commit the lockfile."
+            exit 1
+          fi
+
+      - name: Detect workspace (for hoisting)
+        if: inputs.run-hoisting
+        id: detect-workspace
+        run: |
+          IS_WS=false
+          # npm/yarn workspaces: array form or { packages: [...] } object form
+          if [ -f package.json ] && node -e "const w=require('./package.json').workspaces; process.exit(((Array.isArray(w)&&w.length)||(w&&Array.isArray(w.packages)&&w.packages.length))?0:1)"; then
+            IS_WS=true
+          fi
+          echo "is-workspace=$IS_WS" >> "$GITHUB_OUTPUT"
+          echo "🔎 Hoisting mode: $IS_WS"
+
+      - name: Verify hoisting
+        id: check-hoisting
+        if: inputs.run-hoisting && steps.detect-workspace.outputs.is-workspace == 'true'
+        run: |
+          echo "🔍 Scanning for any nested node_modules folders..."
+
+          # Find nested node_modules, excluding root and its contents
+          NESTED=$(find . -mindepth 2 -name node_modules -type d ! -path './node_modules/*' 2>/dev/null || true)
+
+          if [ -n "$NESTED" ]; then
+            echo "⚠️  Nested node_modules found:"
+            echo "$NESTED"
+            echo ""
+            echo "Checking for real packages (looking for package.json files)..."
+
+            # Look for package.json in nested node_modules (indicates real packages)
+            REAL_PKGS=$(find . -path '*/node_modules/*/package.json' \
+              ! -path './node_modules/*' \
+              ! -path '*/node_modules/.*/*' \
+              2>/dev/null || true)
+
+            if [ -n "$REAL_PKGS" ]; then
+              echo "❌ Found non-hoisted dependencies:"
+              echo "$REAL_PKGS" | sed 's|/package.json||' | sort | uniq
+              echo ""
+              echo "💡 Fix: Ensure 'install-strategy=hoisted' in .npmrc and shared deps in root package.json"
+              exit 1
+            else
+              echo "✅ Only build tool artifacts found (safe to ignore)"
+            fi
+          else
+            echo "✅ Perfect hoisting — no nested node_modules anywhere!"
+          fi
+        continue-on-error: true
+
+      - name: Cache ESLint caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            **/.eslintcache
+          key: ${{ runner.os }}-eslint-${{ hashFiles('**/package-lock.json', '**/eslint.config.js') }}
+          restore-keys: |
+            ${{ runner.os }}-eslint-
+
+      - name: Cache TS Build Info caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            **/tsconfig.tsbuildinfo
+          key: ${{ runner.os }}-tsbuildinfo-${{ hashFiles('**/package-lock.json', '**/tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tsbuildinfo-
+
+      - name: Cache SonarQube scanner
+        uses: actions/cache@v6
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Check for vulnerabilities in dependencies
+        if: inputs.run-audit && github.actor != 'dependabot[bot]'
+        id: check-audit
+        run: npm audit --omit=dev
+        continue-on-error: true
+
+      - name: Check package.json
+        if: inputs.run-packages
+        id: check-packages
+        run: npm run check:packages
+        continue-on-error: true
+
+      - name: Check Format
+        if: inputs.run-format
+        id: check-format
+        run: npm run check:format
+        continue-on-error: true
+
+      - name: Check Type
+        if: inputs.run-types
+        id: check-types
+        run: npm run check:types
+        continue-on-error: true
+
+      - name: Check Lint
+        if: inputs.run-lint
+        id: check-lint
+        run: npm run check:lint
+        continue-on-error: true
+
+      - name: Run Tests
+        id: check-test
+        if: inputs.run-tests
+        run: npm run check:test
+        continue-on-error: true
+
+      - name: Test Report
+        if: '!cancelled() && inputs.run-tests && github.event.pull_request.head.repo.full_name == github.repository'
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        with:
+          name: Tests
+          path: '**/__test-results__/**/*.xml'
+          reporter: jest-junit
+          fail-on-empty: false
+
+      - name: SonarQube Scan
+        if: inputs.run-sonar
+        id: check-sonarqube
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PROJECT_VERSION: ${{ github.head_ref || github.ref_name }}-${{ github.sha }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            -Dsonar.projectVersion=${{ env.PROJECT_VERSION }}
+        continue-on-error: true
+
+      # ── Real result: runs on success AND failure, NOT on cancellation ──
+      - name: Generate Results Report
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v9
+        env:
+          PR_COMMENT: ${{ inputs.pr-comment }}
+        with:
+          script: |
+            const checks = [
+              { name: 'Lock file', outcome: '${{ steps.check-lockfile.outcome }}' },
+              { name: 'Audit', outcome: '${{ steps.check-audit.outcome }}', isWarning: true, optional: true },
+              { name: 'Package.json', outcome: '${{ steps.check-packages.outcome }}', optional: ${{ !inputs.run-packages }} },
+              { name: 'Hoisting', outcome: '${{ steps.check-hoisting.outcome }}', optional: ${{ !inputs.run-hoisting || steps.detect-workspace.outputs.is-workspace != 'true' }} },
+              { name: 'Format', outcome: '${{ steps.check-format.outcome }}', optional: ${{ !inputs.run-format }} },
+              { name: 'Types', outcome: '${{ steps.check-types.outcome }}', optional: ${{ !inputs.run-types }} },
+              { name: 'Lint', outcome: '${{ steps.check-lint.outcome }}', optional: ${{ !inputs.run-lint }} },
+              { name: 'Tests', outcome: '${{ steps.check-test.outcome }}', optional: ${{ !inputs.run-tests }} },
+              { name: 'SonarQube', outcome: '${{ steps.check-sonarqube.outcome }}', isWarning: true, optional: ${{ !inputs.run-sonar }} },
+            ];
+
+            const results = checks.map(c => {
+              let status;
+              if (c.outcome === 'success')      status = '✅';
+              else if (c.outcome === 'failure') status = c.isWarning ? '⚠️' : '❌';
+              else                              status = '⏭️'; // skipped / cancelled
+              return {
+                name: c.name,
+                status,
+                ran: c.outcome === 'success' || c.outcome === 'failure',
+                // only a REAL (non-warning) failure blocks the build
+                blocked: c.outcome === 'failure' && !c.isWarning,
+                optional: !!c.optional,
+              };
+            });
+
+            const anyBlocked = results.some(r => r.blocked);
+            const anySkipped = results.some(r => !r.ran && !r.optional);
+
+            console.log('\n📋 Code Scan Results\n');
+            results.forEach(r => console.log(`${r.status} ${r.name}`));
+
+            const summary = anyBlocked
+              ? '❌ Some checks failed'
+              : anySkipped
+                ? '⚠️ Some checks were skipped (stopped after an earlier failure)'
+                : '✅ All checks passed!';
+            console.log(`\n${summary}`);
+
+            await core.summary
+              .addHeading('📋 Code Scan Results', 2)
+              .addTable([
+                [{ data: 'Check', header: true }, { data: 'Status', header: true }],
+                ...results.map(r => [r.name, r.status]),
+              ])
+              .addRaw(`\n${summary}`)
+              .addRaw('\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped')
+              .write();
+
+            if (context.eventName === 'pull_request' && process.env.PR_COMMENT === 'true') {
+              const MARKER = '<!-- code-scan-report -->';
+              const LOG_START = '<!-- log-start -->';
+              const LOG_END = '<!-- log-end -->';
+              const MAX_LOG = 15;
+
+              const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+              const shortSha = sha.slice(0, 7);
+              const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${sha}`;
+              const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              const updatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) + ' HKT';
+              const statusEmoji = anyBlocked ? '❌' : anySkipped ? '⚠️' : '✅';
+
+              const rows = results.map(r => `| ${r.name} | ${r.status} |`).join('\n');
+              const legend = '\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped';
+              const footer = `\n\n<sub>Commit [\`${shortSha}\`](${commitUrl}) · Run [#${context.runNumber}](${runUrl}) · Updated ${updatedAt}</sub>`;
+              const currentBlock = `## 📋 Code Scan Results\n\n| Check | Status |\n|-------|--------|\n${rows}\n\n${summary}${legend}${footer}`;
+
+              // one fresh line for THIS run — no parsing of past renders
+              const newLine = `| ${statusEmoji} | [#${context.runNumber}](${runUrl}) | [\`${shortSha}\`](${commitUrl}) | ${updatedAt} |`;
+
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              });
+              const existing = comments.find(c => c.body?.includes(MARKER));
+
+              // recover prior log rows: pure data rows between the markers
+              let lines = [];
+              if (existing) {
+                const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
+                if (s >= 0 && e > s) {
+                  lines = existing.body.slice(s + LOG_START.length, e)
+                    .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+                }
+              }
+              lines.unshift(newLine);          // newest on top
+              lines = lines.slice(0, MAX_LOG);  // cap keeps body tiny
+
+              const logBlock =
+                `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
+                `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+
+              const body = `${MARKER}\n${currentBlock}${logBlock}`;
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body,
+                });
+              }
+            }
+
+            if (anyBlocked) core.setFailed('❌ Some checks failed. See results above.');
+
+      # ── Cancellation: only touch the comment if THIS run still owns the banner ──
+      - name: Mark cancelled
+        if: ${{ cancelled() && github.event_name == 'pull_request' && inputs.pr-comment }}
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const MARKER = '<!-- code-scan-report -->';
+            const LOG_START = '<!-- log-start -->';
+            const LOG_END = '<!-- log-end -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.includes(MARKER));
+            if (!existing) return;
+
+            // A newer run may have taken over the banner — if so, leave it alone (no race, no clobber).
+            if (!existing.body.includes(`Running…** — [#${context.runNumber}]`)) return;
+
+            // preserve prior log rows; do NOT append a line for a cancelled run
+            let logBlock = '';
+            const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
+            if (s >= 0 && e > s) {
+              const lines = existing.body.slice(s + LOG_START.length, e)
+                .split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+              if (lines.length) {
+                logBlock =
+                  `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
+                  `| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                  `${LOG_START}\n${lines.join('\n')}\n${LOG_END}\n\n</details>`;
+              }
+            }
+
+            const cancelledBlock = `## 📋 Code Scan Results\n\n🚫 **Cancelled** (superseded or stopped) — [#${context.runNumber}](${runUrl})`;
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: `${MARKER}\n${cancelledBlock}${logBlock}`,
+            });

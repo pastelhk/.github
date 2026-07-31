@@ -1,0 +1,90 @@
+name: Initialize npm
+description: Initialize npm environment
+
+inputs:
+  shell:
+    description: 'The shell to use for running commands'
+    required: false
+    default: bash
+  restore-packages:
+    # NOTE: composite-action inputs have no `type:` key — it is silently ignored.
+    # Every input arrives as a STRING, which is why comparisons below use == 'true'.
+    description: 'Whether to run npm ci'
+    required: true
+    default: 'true'
+  registry-url:
+    description: 'Full private registry URL, exactly as declared in the repo .npmrc (scheme optional, path included if any)'
+    required: false
+  registry-username:
+    description: 'The npm registry username to use'
+    required: false
+  registry-password:
+    description: 'The npm registry password or API token to use'
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version-file: .nvmrc
+        cache: 'npm'
+
+    - name: Enable Corepack
+      run: |
+        # Auto-detect: Corepack is only meaningful when package.json pins a manager.
+        if ! node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" 2>/dev/null; then
+          echo "No packageManager field — skipping Corepack."
+          exit 0
+        fi
+
+        # Corepack is NOT bundled with Node 25+ (Node TSC voted to stop distributing it).
+        if ! command -v corepack >/dev/null 2>&1; then
+          echo "Corepack not bundled with this Node — installing."
+          npm install -g corepack@latest
+        fi
+
+        # Plain `corepack enable` does NOT install an npm shim; npm must be named explicitly.
+        corepack enable npm
+        echo "npm resolved to: $(command -v npm) ($(npm -v))"
+      shell: ${{ inputs.shell }}
+
+    - name: Append auth to .npmrc
+      if: inputs.registry-url != ''
+      env:
+        REGISTRY_URL: ${{ inputs.registry-url }}
+        REGISTRY_USERNAME: ${{ inputs.registry-username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+      run: |
+        set -eo pipefail
+
+        if [ -n "${REGISTRY_PASSWORD:-}" ]; then
+          host="${REGISTRY_URL#http://}"; host="${host#https://}"; host="${host%/}"
+          case "$host" in
+            *://*|"") echo "::error::registry-url malformed after normalisation: '$host'"; exit 1 ;;
+          esac
+
+          encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME:-}" "${REGISTRY_PASSWORD}" | base64 -w 0)"
+
+          # Actions masks the raw secret but NOT its base64 form. This registers the
+          # value for the WHOLE job, covering later steps we don't control
+          # (npm config ls -l, --loglevel=silly, set -x, artifact uploads).
+          echo "::add-mask::${encoded_auth}"
+
+          # Written outside $GITHUB_WORKSPACE: cannot be committed, cannot be picked up
+          # by a workspace artifact upload
+          npmrc="${RUNNER_TEMP}/.npmrc"
+          printf '//%s/:_auth=%s\n' "$host" "$encoded_auth" >> "$npmrc"
+          printf '//%s/:username=%s\n' "$host" "${REGISTRY_USERNAME:-}" >> "$npmrc"
+          chmod 600 "$npmrc"
+
+          # Applies to every subsequent step in the caller's job, not just this action.
+          echo "NPM_CONFIG_USERCONFIG=${npmrc}" >> "$GITHUB_ENV"
+        fi
+      shell: ${{ inputs.shell }}
+
+    - name: Install dependencies
+      if: inputs.restore-packages == 'true'
+      run: npm ci
+      shell: ${{ inputs.shell }}

@@ -1,0 +1,7 @@
+{
+  "name": "PR Dependency Check",
+  "description": "Verify that pull request descriptions reference any dependent pull requests.",
+  "iconName": "tasklist",
+  "categories": ["Automation"],
+  "fileName": "pr-dependency-check.yml"
+}

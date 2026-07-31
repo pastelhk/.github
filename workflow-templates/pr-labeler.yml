@@ -1,0 +1,62 @@
+name: PR Labeler
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  labeler:
+    name: PR Labeler
+    runs-on: ubuntu-latest
+    steps:
+      # This action reads .github/labeler.yml from the repository the PR targets.
+      - uses: actions/labeler@v7
+
+      - name: Label per monorepo
+        uses: TinkurLab/monorepo-pr-labeler-action@026d1e71df075b29ee3986875bfbb8a5b5d969f1 # 4.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_DIRS: 'tools'
+        with:
+          prefix: '🛠️'
+          separator: ' '
+
+      - name: Label per monorepo
+        uses: TinkurLab/monorepo-pr-labeler-action@026d1e71df075b29ee3986875bfbb8a5b5d969f1 # 4.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_DIRS: 'libs'
+        with:
+          prefix: '📚'
+          separator: ' '
+
+      - name: Label per monorepo
+        uses: TinkurLab/monorepo-pr-labeler-action@026d1e71df075b29ee3986875bfbb8a5b5d969f1 # 4.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_DIRS: 'packages'
+        with:
+          prefix: '📦'
+          separator: ' '
+
+      - name: Label per monorepo
+        uses: TinkurLab/monorepo-pr-labeler-action@026d1e71df075b29ee3986875bfbb8a5b5d969f1 # 4.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_DIRS: 'apps'
+        with:
+          prefix: '🚀'
+          separator: ' '
+
+      - name: Label per monorepo
+        uses: TinkurLab/monorepo-pr-labeler-action@026d1e71df075b29ee3986875bfbb8a5b5d969f1 # 4.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_DIRS: 'infra'
+        with:
+          prefix: '🧱'
+          separator: ' '

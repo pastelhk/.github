@@ -1,0 +1,7 @@
+{
+  "name": "PR Labeler",
+  "description": "Automatically label pull requests by changed paths and monorepo packages. Requires .github/labeler.yml in the target repository.",
+  "iconName": "tag",
+  "categories": ["Automation"],
+  "fileName": "pr-labeler.yml"
+}

@@ -1,0 +1,56 @@
+name: Publish
+
+on:
+  workflow_call:
+    inputs:
+      args:
+        description: 'Arguments to pass to the publish script'
+        type: string
+        required: false
+        default: ''
+      runs-on:
+        description: 'Runner label. Use macos-latest only when the publish step needs Xcode.'
+        type: string
+        required: false
+        default: 'ubuntu-latest'
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+    steps:
+      - name: Generate Github App Token for Publish
+        id: generate-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.PUBLISH_APP_ID }}
+          private-key: ${{ secrets.PUBLISH_APP_PRIVATE_KEY }}
+
+      - name: Checkout Repo
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Configure Git User
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Initialize Project
+        uses: pastelhk/.github/.github/actions/npm-init@v1
+        with:
+          restore-packages: true
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_PUBLISH_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PUBLISH_PASSWORD }}
+
+      - name: Ignore changes after authentication
+        run: |
+          git update-index --assume-unchanged .npmrc
+
+      - name: Publish Packages
+        env:
+          ARGS: ${{ inputs.args }}
+        run: npm run publish "$ARGS"

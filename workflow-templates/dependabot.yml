@@ -1,0 +1,54 @@
+version: 2
+
+# NOTE: These secrets are resolved from Dependabot secrets, not Actions secrets,
+# and must be configured separately at org/repository level.
+registries:
+  pastel-npm:
+    type: npm-registry
+    url: https://npm.pastel.dev
+    username: ${{ secrets.PRIVATE_NPM_REGISTRY_USERNAME }}
+    password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+updates:
+  # ---- npm (root lockfile covers the whole workspace) ----
+  - package-ecosystem: 'npm'
+    directory: '/' # root package-lock.json = all packages/* and apps/*
+    registries:
+      - pastel-npm
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
+      timezone: 'Asia/Hong_Kong'
+    open-pull-requests-limit: 10
+    labels: ['dependencies']
+
+  # ---- GitHub Actions (workflows) ----
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Asia/Hong_Kong'
+      time: '09:30'
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types: ['minor', 'patch']
+    labels: ['dependencies', 'ci']
+
+  # ---- Terraform (infra) ----
+  - package-ecosystem: 'terraform'
+    directories:
+      - '/infra/*' # each dir with .tf: infra/main, infra/ciam-init-02-terraform, …
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Asia/Hong_Kong'
+      time: '09:45'
+    open-pull-requests-limit: 5
+    groups:
+      terraform-providers:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    labels: ['dependencies', 'infra']

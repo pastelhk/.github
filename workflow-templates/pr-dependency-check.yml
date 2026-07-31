@@ -1,0 +1,17 @@
+name: PR Dependency Check
+
+on:
+  pull_request_target:
+    types: [opened, edited, closed, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check_dependencies:
+    name: PR Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gregsdennis/dependencies-action@a8cccab69814b9b985496cf97cbfe154c96c03c7 # v1.4.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
