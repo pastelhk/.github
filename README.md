@@ -2,7 +2,7 @@
 
 ​
 Shared GitHub Actions, reusable workflows and starter templates for the Pastel
-organisations (`pastelhk`).
+organizations (`pastelhk`).
 ​
 
 > **This repository is public.** Never commit secrets, internal hostnames or
@@ -47,11 +47,11 @@ once. They are **not** inherited and do **not** receive updates.
 
 - **`permissions:` is mandatory on the calling job.** A called workflow can only
   _downgrade_ the token it receives, never elevate it. Omit the block and the job
-  inherits the repository default, which is read-only in hardened organisations —
+  inherits the repository default, which is read-only in hardened organizations —
   the PR comment fails silently and the test reporter reds the job.
 - **Secrets are passed explicitly, not inherited.** `secrets: inherit` would hand
   this public repository every secret the caller can see. It also only works
-  within a single organisation, so it would break `pasteltech` callers.
+  within a single organization, so it would break `pasteltech` callers.
 - **Do not add your own `concurrency:` block.** Cancellation is owned by the
   called workflow. Setting it in both places causes unpredictable cancellations.
 - **`@v1` is a moving tag**, retagged on each release, so callers pick up fixes
@@ -269,12 +269,12 @@ Not intended to be called directly.
 
 ​
 Files in `workflow-templates/` appear under **Actions → New workflow** in
-repositories across the organisation. Selecting one copies it into that
+repositories across the organization. Selecting one copies it into that
 repository's `.github/workflows/` directory. There is no link back to this
 repository afterwards, so later fixes here do **not** reach copies.
 
-> **Limitation:** workflow templates created by an organisation can only be used
-> in **public** repositories unless the organisation is on GitHub Enterprise
+> **Limitation:** workflow templates created by an organization can only be used
+> in **public** repositories unless the organization is on GitHub Enterprise
 > Cloud. Most client repositories are private, so the templates may not appear
 > there. This restriction does not affect reusable workflows, which work from a
 > public `.github` into private callers on any plan.
@@ -298,10 +298,10 @@ These are **not** workflows and must not be copied into `.github/workflows/`.
 | `templates/dependabot.yml` | `.github/dependabot.yml` | Dependabot config for npm, GitHub Actions and Terraform |
 | ​                          |
 
-## Organisation configuration
+## Organization configuration
 
 ​
-**Actions variables (`vars`) — organisation level**
+**Actions variables (`vars`) — organization level**
 ​
 `PRIVATE_NPM_REGISTRY_URL`, `PRIVATE_NPM_REGISTRY_USERNAME`,
 `PRIVATE_NPM_REGISTRY_PUBLISH_USERNAME`, `SONAR_HOST_URL`, `PUBLISH_APP_ID`
@@ -309,7 +309,7 @@ These are **not** workflows and must not be copied into `.github/workflows/`.
 **Actions variables (`vars`) — repository level**
 ​
 `SONAR_PROJECT_KEY` — must be unique per repository. Setting this at
-organisation level makes every repository report into a single SonarQube
+organization level makes every repository report into a single SonarQube
 project, silently merging coverage and quality gates across clients.
 ​
 **Actions secrets**

@@ -62,7 +62,7 @@ runs:
         if [ -n "${REGISTRY_PASSWORD:-}" ]; then
           host="${REGISTRY_URL#http://}"; host="${host#https://}"; host="${host%/}"
           case "$host" in
-            *://*|"") echo "::error::registry-url malformed after normalisation: '$host'"; exit 1 ;;
+            *://*|"") echo "::error::registry-url malformed after normalization: '$host'"; exit 1 ;;
           esac
 
           encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME:-}" "${REGISTRY_PASSWORD}" | base64 -w 0)"

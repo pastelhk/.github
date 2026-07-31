@@ -1,7 +1,7 @@
 {
   "name": "pastelhk-github",
   "version": "1.0.0",
-  "description": "Shared GitHub Actions, reusable workflows and community health files for the Pastel organisation.",
+  "description": "Shared GitHub Actions, reusable workflows and community health files for the Pastel organization.",
   "private": true,
   "type": "module",
   "author": "Pastel Tech <info@pastel.com.hk>",
