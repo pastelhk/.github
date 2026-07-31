@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize npm
+        uses: pastelhk/.github/.github/actions/npm-init@develop
+        with:
+          restore-packages: true
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+      - name: Check format
+        run: npm run check:format
+
+      - name: Check package alignment
+        run: npm run check:packages
+
+      - name: Lint GitHub Actions
+        uses: raven-actions/actionlint@v2
