@@ -47,6 +47,12 @@ on:
         description: 'Timeout in minutes for the entire job'
         type: number
         default: 12
+      extra-install-cache-paths:
+        description: >
+          Newline-separated paths to cache alongside node_modules. A cache hit skips
+          postinstall/prepare, so list anything those produce outside node_modules here.
+        type: string
+        default: ''
     secrets:
       SONAR_TOKEN:
         required: false
@@ -127,6 +133,16 @@ jobs:
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 
+      # Lockfile + Node version + arch key (no sha — wants a hit across commits).
+      # .nvmrc is in the key so a Node bump alone still misses: some native deps are Node-ABI-specific.
+      - name: Cache node_modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            node_modules
+            ${{ inputs.extra-install-cache-paths }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
+
       # Intentionally use `npm install` instead of `npm ci` to detect updates to lock file
       - name: Install dependencies
         run: npm install
@@ -186,22 +202,30 @@ jobs:
           fi
         continue-on-error: true
 
+      # `**/…` and hashFiles('**/…') walk node_modules too (measured 15-65s/run).
+      # The sha suffix makes the cache actually refresh instead of never saving.
       - name: Cache ESLint caches
         uses: actions/cache@v6
         with:
           path: |
-            **/.eslintcache
-          key: ${{ runner.os }}-eslint-${{ hashFiles('**/package-lock.json', '**/eslint.config.js') }}
+            .eslintcache
+            */*/.eslintcache
+            !node_modules/**
+          key: ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-
             ${{ runner.os }}-eslint-
 
       - name: Cache TS Build Info caches
         uses: actions/cache@v6
         with:
           path: |
-            **/tsconfig.tsbuildinfo
-          key: ${{ runner.os }}-tsbuildinfo-${{ hashFiles('**/package-lock.json', '**/tsconfig.json') }}
+            tsconfig.tsbuildinfo
+            */*/tsconfig.tsbuildinfo
+            !node_modules/**
+          key: ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-
             ${{ runner.os }}-tsbuildinfo-
 
       - name: Cache SonarQube scanner
