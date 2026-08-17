@@ -60,8 +60,8 @@ on:
         required: false
 
 jobs:
-  scan:
-    name: Code Scan
+  checks:
+    name: Checks
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout }}
 
@@ -69,6 +69,17 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+
+    outputs:
+      lockfile: ${{ steps.check-lockfile.outcome }}
+      audit: ${{ steps.check-audit.outcome }}
+      packages: ${{ steps.check-packages.outcome }}
+      hoisting: ${{ steps.check-hoisting.outcome }}
+      is-workspace: ${{ steps.detect-workspace.outputs.is-workspace }}
+      format: ${{ steps.check-format.outcome }}
+      types: ${{ steps.check-types.outcome }}
+      lint: ${{ steps.check-lint.outcome }}
+      tests: ${{ steps.check-test.outcome }}
 
     steps:
       - name: Post pending comment
@@ -123,8 +134,6 @@ jobs:
             }
 
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - uses: pastelhk/.github/.github/actions/npm-init@v1
         with:
@@ -228,13 +237,6 @@ jobs:
             ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-
             ${{ runner.os }}-tsbuildinfo-
 
-      - name: Cache SonarQube scanner
-        uses: actions/cache@v6
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-
       - name: Check for vulnerabilities in dependencies
         if: inputs.run-audit && github.actor != 'dependabot[bot]'
         id: check-audit
@@ -280,8 +282,52 @@ jobs:
           reporter: jest-junit
           fail-on-empty: false
 
+  sonar:
+    name: SonarQube
+    if: inputs.run-sonar
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+
+    permissions:
+      contents: read
+
+    outputs:
+      sonar: ${{ steps.check-sonarqube.outcome }}
+
+    steps:
+      # SonarQube's new-code/blame analysis needs full history; `checks` doesn't.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pastelhk/.github/.github/actions/npm-init@v1
+        with:
+          restore-packages: false
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            node_modules
+            ${{ inputs.extra-install-cache-paths }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
+
+      # SonarJS's type-aware rules resolve imports through node_modules — needs a real
+      # install, not just the checkout, or findings can silently change.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Cache SonarQube scanner
+        uses: actions/cache@v6
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
       - name: SonarQube Scan
-        if: inputs.run-sonar
         id: check-sonarqube
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
@@ -294,24 +340,48 @@ jobs:
             -Dsonar.projectVersion=${{ env.PROJECT_VERSION }}
         continue-on-error: true
 
-      # ── Real result: runs on success AND failure, NOT on cancellation ──
+  report:
+    name: Code Scan
+    needs: [checks, sonar]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      # Step-level guard only — whether this job gets scheduled at all after an
+      # upstream cancellation is the open item noted in the PR description.
       - name: Generate Results Report
         if: ${{ !cancelled() }}
         uses: actions/github-script@v9
         env:
           PR_COMMENT: ${{ inputs.pr-comment }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          SONAR_RESULT: ${{ needs.sonar.result }}
         with:
           script: |
+            // needs.sonar.outputs.sonar is 'skipped' when the sonar job died before its
+            // scan step ran (e.g. install failed) — fall back to the job result so that
+            // shows as a failure instead of a misleading skip.
+            const sonarStepOutcome = '${{ needs.sonar.outputs.sonar }}';
+            const sonarOutcome =
+              sonarStepOutcome === 'skipped' && process.env.SONAR_RESULT === 'failure'
+                ? 'failure'
+                : sonarStepOutcome || process.env.SONAR_RESULT;
+
             const checks = [
-              { name: 'Lock file', outcome: '${{ steps.check-lockfile.outcome }}' },
-              { name: 'Audit', outcome: '${{ steps.check-audit.outcome }}', isWarning: true, optional: true },
-              { name: 'Package.json', outcome: '${{ steps.check-packages.outcome }}', optional: ${{ !inputs.run-packages }} },
-              { name: 'Hoisting', outcome: '${{ steps.check-hoisting.outcome }}', optional: ${{ !inputs.run-hoisting || steps.detect-workspace.outputs.is-workspace != 'true' }} },
-              { name: 'Format', outcome: '${{ steps.check-format.outcome }}', optional: ${{ !inputs.run-format }} },
-              { name: 'Types', outcome: '${{ steps.check-types.outcome }}', optional: ${{ !inputs.run-types }} },
-              { name: 'Lint', outcome: '${{ steps.check-lint.outcome }}', optional: ${{ !inputs.run-lint }} },
-              { name: 'Tests', outcome: '${{ steps.check-test.outcome }}', optional: ${{ !inputs.run-tests }} },
-              { name: 'SonarQube', outcome: '${{ steps.check-sonarqube.outcome }}', isWarning: true, optional: ${{ !inputs.run-sonar }} },
+              { name: 'Lock file', outcome: '${{ needs.checks.outputs.lockfile }}' },
+              { name: 'Audit', outcome: '${{ needs.checks.outputs.audit }}', isWarning: true, optional: true },
+              { name: 'Package.json', outcome: '${{ needs.checks.outputs.packages }}', optional: ${{ !inputs.run-packages }} },
+              { name: 'Hoisting', outcome: '${{ needs.checks.outputs.hoisting }}', optional: ${{ !inputs.run-hoisting || needs.checks.outputs.is-workspace != 'true' }} },
+              { name: 'Format', outcome: '${{ needs.checks.outputs.format }}', optional: ${{ !inputs.run-format }} },
+              { name: 'Types', outcome: '${{ needs.checks.outputs.types }}', optional: ${{ !inputs.run-types }} },
+              { name: 'Lint', outcome: '${{ needs.checks.outputs.lint }}', optional: ${{ !inputs.run-lint }} },
+              { name: 'Tests', outcome: '${{ needs.checks.outputs.tests }}', optional: ${{ !inputs.run-tests }} },
+              { name: 'SonarQube', outcome: sonarOutcome, isWarning: true, optional: ${{ !inputs.run-sonar }} },
             ];
 
             const results = checks.map(c => {
@@ -331,11 +401,13 @@ jobs:
 
             const anyBlocked = results.some(r => r.blocked);
             const anySkipped = results.some(r => !r.ran && !r.optional);
+            // covers checks failing before any check-* step runs (install, checkout, timeout)
+            const checksJobFailed = process.env.CHECKS_RESULT !== 'success';
 
             console.log('\n📋 Code Scan Results\n');
             results.forEach(r => console.log(`${r.status} ${r.name}`));
 
-            const summary = anyBlocked
+            const summary = anyBlocked || checksJobFailed
               ? '❌ Some checks failed'
               : anySkipped
                 ? '⚠️ Some checks were skipped (stopped after an earlier failure)'
@@ -363,7 +435,7 @@ jobs:
               const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${sha}`;
               const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               const updatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) + ' HKT';
-              const statusEmoji = anyBlocked ? '❌' : anySkipped ? '⚠️' : '✅';
+              const statusEmoji = anyBlocked || checksJobFailed ? '❌' : anySkipped ? '⚠️' : '✅';
 
               const rows = results.map(r => `| ${r.name} | ${r.status} |`).join('\n');
               const legend = '\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped';
@@ -409,7 +481,7 @@ jobs:
               }
             }
 
-            if (anyBlocked) core.setFailed('❌ Some checks failed. See results above.');
+            if (anyBlocked || checksJobFailed) core.setFailed('❌ Some checks failed. See results above.');
 
       # ── Cancellation: only touch the comment if THIS run still owns the banner ──
       - name: Mark cancelled
