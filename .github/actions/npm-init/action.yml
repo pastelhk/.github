@@ -21,6 +21,13 @@ inputs:
   registry-password:
     description: 'The npm registry password or API token to use'
     required: false
+  package-cache:
+    description: >
+      setup-node's built-in cache mode ('npm', 'yarn', 'pnpm', or '' to disable).
+      Set to '' when the caller caches node_modules itself — the ~/.npm cache is
+      ~390MB per ref and will evict a repo's node_modules cache entries.
+    required: false
+    default: 'npm'
 
 runs:
   using: composite
@@ -29,7 +36,7 @@ runs:
       uses: actions/setup-node@v7
       with:
         node-version-file: .nvmrc
-        cache: 'npm'
+        cache: ${{ inputs.package-cache }}
 
     - name: Enable Corepack
       run: |
