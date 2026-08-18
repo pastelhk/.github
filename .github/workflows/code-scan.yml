@@ -138,7 +138,7 @@ jobs:
       - uses: pastelhk/.github/.github/actions/npm-init@perf/node-modules-cache-hit-rate
         with:
           restore-packages: false
-          package-cache: ''
+          package-cache: 'false'
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
@@ -308,7 +308,7 @@ jobs:
       - uses: pastelhk/.github/.github/actions/npm-init@perf/node-modules-cache-hit-rate
         with:
           restore-packages: false
-          package-cache: ''
+          package-cache: 'false'
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}

@@ -22,12 +22,16 @@ inputs:
     description: 'The npm registry password or API token to use'
     required: false
   package-cache:
+    # setup-node@v7 deprecated the string `cache` input in favour of the boolean
+    # `package-manager-cache` input, which auto-detects the package manager and
+    # defaults to true regardless of `cache` — so this maps to that boolean now.
     description: >
-      setup-node's built-in cache mode ('npm', 'yarn', 'pnpm', or '' to disable).
-      Set to '' when the caller caches node_modules itself — the ~/.npm cache is
-      ~390MB per ref and will evict a repo's node_modules cache entries.
+      Whether to let setup-node auto-cache the package manager's global cache
+      (~/.npm etc). Set to 'false' when the caller caches node_modules itself —
+      the ~/.npm cache is ~390MB per ref and will evict a repo's node_modules
+      cache entries.
     required: false
-    default: 'npm'
+    default: 'true'
 
 runs:
   using: composite
@@ -36,7 +40,7 @@ runs:
       uses: actions/setup-node@v7
       with:
         node-version-file: .nvmrc
-        cache: ${{ inputs.package-cache }}
+        package-manager-cache: ${{ inputs.package-cache }}
 
     - name: Enable Corepack
       run: |
