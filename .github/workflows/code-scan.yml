@@ -53,6 +53,14 @@ on:
           postinstall/prepare, so list anything those produce outside node_modules here.
         type: string
         default: ''
+      runs-on:
+        description: >
+          Runner label for the checks and sonar jobs, e.g. 'ubuntu-24.04-arm' for the
+          cheaper/faster arm64 runner. Default keeps every existing caller unchanged;
+          opt in only after confirming your workspace's native deps (Prisma engines,
+          swc/esbuild/etc.) and Sonar findings are unaffected on arm64.
+        type: string
+        default: 'ubuntu-latest'
     secrets:
       SONAR_TOKEN:
         required: false
@@ -62,7 +70,7 @@ on:
 jobs:
   checks:
     name: Checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout }}
 
     permissions:
@@ -290,7 +298,7 @@ jobs:
   sonar:
     name: SonarQube
     if: inputs.run-sonar
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout }}
 
     permissions:
