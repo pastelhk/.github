@@ -135,7 +135,7 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - uses: pastelhk/.github/.github/actions/npm-init@v1
+      - uses: pastelhk/.github/.github/actions/npm-init@perf/node-modules-cache-hit-rate
         with:
           restore-packages: false
           package-cache: ''
@@ -305,7 +305,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: pastelhk/.github/.github/actions/npm-init@v1
+      - uses: pastelhk/.github/.github/actions/npm-init@perf/node-modules-cache-hit-rate
         with:
           restore-packages: false
           package-cache: ''
