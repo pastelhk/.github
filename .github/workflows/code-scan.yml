@@ -138,12 +138,15 @@ jobs:
       - uses: pastelhk/.github/.github/actions/npm-init@v1
         with:
           restore-packages: false
+          package-cache: 'false'
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 
       # Lockfile + Node version + arch key (no sha — wants a hit across commits).
       # .nvmrc is in the key so a Node bump alone still misses: some native deps are Node-ABI-specific.
+      # restore-keys falls back to the nearest prefix match on a lockfile-hash miss — npm install
+      # below still runs and reconciles the delta, so lockfile-drift detection is unaffected.
       - name: Cache node_modules
         uses: actions/cache@v6
         with:
@@ -151,6 +154,8 @@ jobs:
             node_modules
             ${{ inputs.extra-install-cache-paths }}
           key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-node-modules-
 
       # Intentionally use `npm install` instead of `npm ci` to detect updates to lock file
       - name: Install dependencies
@@ -303,6 +308,7 @@ jobs:
       - uses: pastelhk/.github/.github/actions/npm-init@v1
         with:
           restore-packages: false
+          package-cache: 'false'
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
@@ -314,18 +320,22 @@ jobs:
             node_modules
             ${{ inputs.extra-install-cache-paths }}
           key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-node-modules-
 
       # SonarJS's type-aware rules resolve imports through node_modules — needs a real
       # install, not just the checkout, or findings can silently change.
       - name: Install dependencies
         run: npm install
 
+      # Keyed on the pinned action version below, not a bare OS name, so bumping the
+      # scanner action actually rotates the cache instead of serving a stale scanner forever.
       - name: Cache SonarQube scanner
         uses: actions/cache@v6
         with:
           path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
+          key: ${{ runner.os }}-sonar-v8.2.1
+          restore-keys: ${{ runner.os }}-sonar-
 
       - name: SonarQube Scan
         id: check-sonarqube
