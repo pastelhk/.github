@@ -345,13 +345,20 @@ jobs:
           key: ${{ runner.os }}-sonar-v8.2.1
           restore-keys: ${{ runner.os }}-sonar-
 
+      # Sonar rejects projectVersion > 100 chars; '-' + 40-char sha leaves 59 for the ref.
+      - name: Compute Sonar project version
+        id: sonar-version
+        env:
+          REF: ${{ github.head_ref || github.ref_name }}
+        run: echo "value=${REF:0:59}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: SonarQube Scan
         id: check-sonarqube
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          PROJECT_VERSION: ${{ github.head_ref || github.ref_name }}-${{ github.sha }}
+          PROJECT_VERSION: ${{ steps.sonar-version.outputs.value }}
         with:
           args: >
             -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
