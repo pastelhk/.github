@@ -1,0 +1,182 @@
+name: Code Scan Report
+description: Render code scan results to the job summary and the sticky PR comment, and fail on a blocking result
+
+inputs:
+  results:
+    description: 'JSON array of { name, outcome, isWarning?, optional? }; outcome is a step outcome or job result'
+    required: true
+  extra-results:
+    description: 'JSON array in the same shape; replaces same-named rows of `results`, else appended (e.g. caller-owned Tests)'
+    required: false
+    default: '[]'
+  jobs:
+    description: 'JSON object shaped like `needs`; any job whose result is failure or cancelled fails the report'
+    required: false
+    default: '{}'
+  pr-comment:
+    description: "Post/update the sticky PR comment ('true' or 'false')"
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Results Report
+      if: ${{ !cancelled() }}
+      uses: actions/github-script@v9
+      env:
+        RESULTS: ${{ inputs.results }}
+        EXTRA_RESULTS: ${{ inputs.extra-results }}
+        JOBS: ${{ inputs.jobs }}
+        PR_COMMENT: ${{ inputs.pr-comment }}
+      with:
+        script: |
+          // An upstream job that died before collecting leaves RESULTS empty; JOBS then fails the report.
+          const base = JSON.parse(process.env.RESULTS || '[]');
+          const extra = JSON.parse(process.env.EXTRA_RESULTS || '[]');
+          // An extra result replaces the same-named row in place (e.g. caller-owned Tests over a skipped one).
+          const extraByName = new Map(extra.map(c => [c.name, c]));
+          const checks = [
+            ...base.map(c => extraByName.get(c.name) ?? c),
+            ...extra.filter(c => !base.some(b => b.name === c.name)),
+          ];
+
+          const results = checks.map(c => {
+            let status;
+            if (c.outcome === 'success')      status = '✅';
+            else if (c.outcome === 'failure') status = c.isWarning ? '⚠️' : '❌';
+            else                              status = '⏭️'; // skipped / cancelled
+            return {
+              name: c.name,
+              status,
+              ran: c.outcome === 'success' || c.outcome === 'failure',
+              // only a REAL (non-warning) failure blocks the build
+              blocked: c.outcome === 'failure' && !c.isWarning,
+              optional: !!c.optional,
+            };
+          });
+
+          const anyBlocked = results.some(r => r.blocked);
+          const anySkipped = results.some(r => !r.ran && !r.optional);
+          // covers a job failing before any check step runs (install, checkout, timeout)
+          const jobFailed = Object.values(JSON.parse(process.env.JOBS || '{}'))
+            .some(j => j.result === 'failure' || j.result === 'cancelled');
+
+          console.log('\n📋 Code Scan Results\n');
+          results.forEach(r => console.log(`${r.status} ${r.name}`));
+
+          const summary = anyBlocked || jobFailed
+            ? '❌ Some checks failed'
+            : anySkipped
+              ? '⚠️ Some checks were skipped (stopped after an earlier failure)'
+              : '✅ All checks passed!';
+          console.log(`\n${summary}`);
+
+          await core.summary
+            .addHeading('📋 Code Scan Results', 2)
+            .addTable([
+              [{ data: 'Check', header: true }, { data: 'Status', header: true }],
+              ...results.map(r => [r.name, r.status]),
+            ])
+            .addRaw(`\n${summary}`)
+            .addRaw('\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped')
+            .write();
+
+          if (context.eventName === 'pull_request' && process.env.PR_COMMENT === 'true') {
+            const MARKER = '<!-- code-scan-report -->';
+            const LOG_START = '<!-- log-start -->';
+            const LOG_END = '<!-- log-end -->';
+            const MAX_LOG = 15;
+
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const shortSha = sha.slice(0, 7);
+            const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${sha}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const updatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) + ' HKT';
+            const statusEmoji = anyBlocked || jobFailed ? '❌' : anySkipped ? '⚠️' : '✅';
+
+            const rows = results.map(r => `| ${r.name} | ${r.status} |`).join('\n');
+            const legend = '\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped';
+            const footer = `\n\n<sub>Commit [\`${shortSha}\`](${commitUrl}) · Run [#${context.runNumber}](${runUrl}) · Updated ${updatedAt}</sub>`;
+            const currentBlock = `## 📋 Code Scan Results\n\n| Check | Status |\n|-------|--------|\n${rows}\n\n${summary}${legend}${footer}`;
+
+            // one fresh line for THIS run — no parsing of past renders
+            const newLine = `| ${statusEmoji} | [#${context.runNumber}](${runUrl}) | [\`${shortSha}\`](${commitUrl}) | ${updatedAt} |`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.includes(MARKER));
+
+            // recover prior log rows: pure data rows between the markers
+            let lines = [];
+            if (existing) {
+              const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
+              if (s >= 0 && e > s) {
+                lines = existing.body.slice(s + LOG_START.length, e)
+                  .split('\n').map(l => l.trim())
+                  .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
+              }
+            }
+            lines.unshift(newLine);          // newest on top
+            lines = lines.slice(0, MAX_LOG);  // cap keeps body tiny
+
+            const logBlock =
+              `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
+              `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+              `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
+
+            const body = `${MARKER}\n${currentBlock}${logBlock}`;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body,
+              });
+            }
+          }
+
+          if (anyBlocked || jobFailed) core.setFailed('❌ Some checks failed. See results above.');
+
+    # ── Cancellation: only touch the comment if THIS run still owns the banner ──
+    - name: Mark cancelled
+      if: ${{ cancelled() && github.event_name == 'pull_request' && inputs.pr-comment == 'true' }}
+      uses: actions/github-script@v9
+      with:
+        script: |
+          const MARKER = '<!-- code-scan-report -->';
+          const LOG_START = '<!-- log-start -->';
+          const LOG_END = '<!-- log-end -->';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+          });
+          const existing = comments.find(c => c.body?.includes(MARKER));
+          if (!existing) return;
+
+          // A newer run may have taken over the banner — if so, leave it alone (no race, no clobber).
+          if (!existing.body.includes(`Running…** — [#${context.runNumber}]`)) return;
+
+          // preserve prior log rows; do NOT append a line for a cancelled run
+          let logBlock = '';
+          const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
+          if (s >= 0 && e > s) {
+            const lines = existing.body.slice(s + LOG_START.length, e)
+              .split('\n').map(l => l.trim())
+              .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
+            if (lines.length) {
+              logBlock =
+                `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
+                `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
+                `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
+            }
+          }
+
+          const cancelledBlock = `## 📋 Code Scan Results\n\n🚫 **Cancelled** (superseded or stopped) — [#${context.runNumber}](${runUrl})`;
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: `${MARKER}\n${cancelledBlock}${logBlock}`,
+          });
