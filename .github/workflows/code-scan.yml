@@ -27,6 +27,13 @@ on:
         description: 'Run tests (npm run check:test)'
         type: boolean
         default: true
+      test-groups:
+        description: >
+          JSON array of test groups to run as parallel jobs instead of inside `checks`.
+          Each entry is space-separated workspace paths; '*' is every workspace not named
+          in another entry. Example: '["apps/web", "*"]'. Empty keeps tests in `checks`.
+        type: string
+        default: ''
       run-audit:
         description: 'Run npm audit'
         type: boolean
@@ -282,15 +289,86 @@ jobs:
 
       - name: Run Tests
         id: check-test
-        if: inputs.run-tests
+        if: inputs.run-tests && inputs.test-groups == ''
         run: npm run check:test
         continue-on-error: true
 
       - name: Test Report
-        if: '!cancelled() && inputs.run-tests && github.event.pull_request.head.repo.full_name == github.repository'
+        if: "!cancelled() && inputs.run-tests && inputs.test-groups == '' && github.event.pull_request.head.repo.full_name == github.repository"
         uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
         with:
           name: Tests
+          path: '**/__test-results__/**/*.xml'
+          reporter: jest-junit
+          fail-on-empty: false
+
+  tests:
+    name: Tests (${{ matrix.group }})
+    if: inputs.run-tests && inputs.test-groups != ''
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout }}
+
+    permissions:
+      contents: read
+      checks: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Fallback keeps fromJSON valid for default callers, whose `if:` skips this job anyway.
+        group: ${{ fromJSON(inputs.test-groups || '[""]') }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pastelhk/.github/.github/actions/npm-init@v1
+        with:
+          restore-packages: false
+          package-cache: 'false'
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            node_modules
+            ${{ inputs.extra-install-cache-paths }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-node-modules-
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Tests
+        shell: bash
+        env:
+          GROUP: ${{ matrix.group }}
+          TEST_GROUPS: ${{ inputs.test-groups }}
+        run: |
+          if [ "$GROUP" = '*' ]; then
+            ALL=$(npm query .workspace)
+            if [ "$(jq length <<< "$ALL")" -eq 0 ]; then
+              echo "::error::test-groups needs npm workspaces; leave it empty for a single-package repo"
+              exit 1
+            fi
+            GROUP=$(jq -r --argjson groups "$TEST_GROUPS" \
+              '($groups | map(split(" ")) | add) as $named | [.[].location | select(IN($named[]) | not)] | join(" ")' <<< "$ALL")
+          fi
+          read -ra WORKSPACES <<< "$GROUP"
+          if [ "${#WORKSPACES[@]}" -eq 0 ]; then
+            echo "::notice::Every workspace is named in another group; nothing left for '*'"
+            exit 0
+          fi
+          npm run check:test --if-present "${WORKSPACES[@]/#/--workspace=}"
+
+      - name: Test Report
+        if: '!cancelled() && github.event.pull_request.head.repo.full_name == github.repository'
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        with:
+          name: Tests (${{ matrix.group }})
           path: '**/__test-results__/**/*.xml'
           reporter: jest-junit
           fail-on-empty: false
@@ -367,7 +445,7 @@ jobs:
 
   report:
     name: Code Scan
-    needs: [checks, sonar]
+    needs: [checks, sonar, tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -386,6 +464,8 @@ jobs:
           PR_COMMENT: ${{ inputs.pr-comment }}
           CHECKS_RESULT: ${{ needs.checks.result }}
           SONAR_RESULT: ${{ needs.sonar.result }}
+          TEST_GROUPS: ${{ inputs.test-groups }}
+          TESTS_RESULT: ${{ needs.tests.result }}
         with:
           script: |
             // needs.sonar.outputs.sonar is 'skipped' when the sonar job died before its
@@ -397,6 +477,11 @@ jobs:
                 ? 'failure'
                 : sonarStepOutcome || process.env.SONAR_RESULT;
 
+            // Parallel test groups report a job result; a leg that timed out shows as cancelled.
+            const testsOutcome = process.env.TEST_GROUPS
+              ? (process.env.TESTS_RESULT === 'cancelled' ? 'failure' : process.env.TESTS_RESULT)
+              : '${{ needs.checks.outputs.tests }}';
+
             const checks = [
               { name: 'Lock file', outcome: '${{ needs.checks.outputs.lockfile }}' },
               { name: 'Audit', outcome: '${{ needs.checks.outputs.audit }}', isWarning: true, optional: true },
@@ -405,7 +490,7 @@ jobs:
               { name: 'Format', outcome: '${{ needs.checks.outputs.format }}', optional: ${{ !inputs.run-format }} },
               { name: 'Types', outcome: '${{ needs.checks.outputs.types }}', optional: ${{ !inputs.run-types }} },
               { name: 'Lint', outcome: '${{ needs.checks.outputs.lint }}', optional: ${{ !inputs.run-lint }} },
-              { name: 'Tests', outcome: '${{ needs.checks.outputs.tests }}', optional: ${{ !inputs.run-tests }} },
+              { name: 'Tests', outcome: testsOutcome, optional: ${{ !inputs.run-tests }} },
               { name: 'SonarQube', outcome: sonarOutcome, isWarning: true, optional: ${{ !inputs.run-sonar }} },
             ];
 
