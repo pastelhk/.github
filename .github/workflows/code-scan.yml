@@ -43,6 +43,12 @@ on:
         description: 'Post/update the sticky PR comment (needs pull-requests: write on the caller job)'
         type: boolean
         default: true
+      report:
+        description: >
+          Render the results and own the `Code Scan` check. Set false when the caller adds its own jobs
+          and reports through code-scan-report.yml, passing this workflow's `results` output.
+        type: boolean
+        default: true
       timeout:
         description: 'Timeout in minutes for the entire job'
         type: number
@@ -61,6 +67,10 @@ on:
           swc/esbuild/etc.) and Sonar findings are unaffected on arm64.
         type: string
         default: 'ubuntu-latest'
+    outputs:
+      results:
+        description: 'JSON array of { name, outcome, isWarning?, optional? }, the input shape of code-scan-report.yml'
+        value: ${{ jobs.report.outputs.results }}
     secrets:
       SONAR_TOKEN:
         required: false
@@ -366,7 +376,8 @@ jobs:
         continue-on-error: true
 
   report:
-    name: Code Scan
+    # With report: false this job only collects; the caller's code-scan-report.yml job owns `Code Scan`.
+    name: ${{ inputs.report && 'Code Scan' || 'Collect results' }}
     needs: [checks, sonar]
     if: always()
     runs-on: ubuntu-latest
@@ -376,15 +387,17 @@ jobs:
       contents: read
       pull-requests: write
 
+    outputs:
+      results: ${{ steps.collect.outputs.results }}
+
     steps:
       # Step-level guard only — whether this job gets scheduled at all after an
       # upstream cancellation is the open item noted in the PR description.
-      - name: Generate Results Report
+      - name: Collect results
+        id: collect
         if: ${{ !cancelled() }}
         uses: actions/github-script@v9
         env:
-          PR_COMMENT: ${{ inputs.pr-comment }}
-          CHECKS_RESULT: ${{ needs.checks.result }}
           SONAR_RESULT: ${{ needs.sonar.result }}
         with:
           script: |
@@ -408,142 +421,13 @@ jobs:
               { name: 'Tests', outcome: '${{ needs.checks.outputs.tests }}', optional: ${{ !inputs.run-tests }} },
               { name: 'SonarQube', outcome: sonarOutcome, isWarning: true, optional: ${{ !inputs.run-sonar }} },
             ];
+            core.setOutput('results', JSON.stringify(checks));
 
-            const results = checks.map(c => {
-              let status;
-              if (c.outcome === 'success')      status = '✅';
-              else if (c.outcome === 'failure') status = c.isWarning ? '⚠️' : '❌';
-              else                              status = '⏭️'; // skipped / cancelled
-              return {
-                name: c.name,
-                status,
-                ran: c.outcome === 'success' || c.outcome === 'failure',
-                // only a REAL (non-warning) failure blocks the build
-                blocked: c.outcome === 'failure' && !c.isWarning,
-                optional: !!c.optional,
-              };
-            });
-
-            const anyBlocked = results.some(r => r.blocked);
-            const anySkipped = results.some(r => !r.ran && !r.optional);
-            // covers checks failing before any check-* step runs (install, checkout, timeout)
-            const checksJobFailed = process.env.CHECKS_RESULT !== 'success';
-
-            console.log('\n📋 Code Scan Results\n');
-            results.forEach(r => console.log(`${r.status} ${r.name}`));
-
-            const summary = anyBlocked || checksJobFailed
-              ? '❌ Some checks failed'
-              : anySkipped
-                ? '⚠️ Some checks were skipped (stopped after an earlier failure)'
-                : '✅ All checks passed!';
-            console.log(`\n${summary}`);
-
-            await core.summary
-              .addHeading('📋 Code Scan Results', 2)
-              .addTable([
-                [{ data: 'Check', header: true }, { data: 'Status', header: true }],
-                ...results.map(r => [r.name, r.status]),
-              ])
-              .addRaw(`\n${summary}`)
-              .addRaw('\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped')
-              .write();
-
-            if (context.eventName === 'pull_request' && process.env.PR_COMMENT === 'true') {
-              const MARKER = '<!-- code-scan-report -->';
-              const LOG_START = '<!-- log-start -->';
-              const LOG_END = '<!-- log-end -->';
-              const MAX_LOG = 15;
-
-              const sha = context.payload.pull_request?.head?.sha ?? context.sha;
-              const shortSha = sha.slice(0, 7);
-              const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${sha}`;
-              const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-              const updatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong', hour12: false }) + ' HKT';
-              const statusEmoji = anyBlocked || checksJobFailed ? '❌' : anySkipped ? '⚠️' : '✅';
-
-              const rows = results.map(r => `| ${r.name} | ${r.status} |`).join('\n');
-              const legend = '\n\n> ✅ passed · ❌ failed · ⚠️ warning · ⏭️ skipped';
-              const footer = `\n\n<sub>Commit [\`${shortSha}\`](${commitUrl}) · Run [#${context.runNumber}](${runUrl}) · Updated ${updatedAt}</sub>`;
-              const currentBlock = `## 📋 Code Scan Results\n\n| Check | Status |\n|-------|--------|\n${rows}\n\n${summary}${legend}${footer}`;
-
-              // one fresh line for THIS run — no parsing of past renders
-              const newLine = `| ${statusEmoji} | [#${context.runNumber}](${runUrl}) | [\`${shortSha}\`](${commitUrl}) | ${updatedAt} |`;
-
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
-              });
-              const existing = comments.find(c => c.body?.includes(MARKER));
-
-              // recover prior log rows: pure data rows between the markers
-              let lines = [];
-              if (existing) {
-                const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
-                if (s >= 0 && e > s) {
-                  lines = existing.body.slice(s + LOG_START.length, e)
-                    .split('\n').map(l => l.trim())
-                    .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
-                }
-              }
-              lines.unshift(newLine);          // newest on top
-              lines = lines.slice(0, MAX_LOG);  // cap keeps body tiny
-
-              const logBlock =
-                `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
-                `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
-                `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
-
-              const body = `${MARKER}\n${currentBlock}${logBlock}`;
-
-              if (existing) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body,
-                });
-              }
-            }
-
-            if (anyBlocked || checksJobFailed) core.setFailed('❌ Some checks failed. See results above.');
-
-      # ── Cancellation: only touch the comment if THIS run still owns the banner ──
-      - name: Mark cancelled
-        if: ${{ cancelled() && github.event_name == 'pull_request' && inputs.pr-comment }}
-        uses: actions/github-script@v9
+      # Runs on cancel too, so the action can mark the banner cancelled.
+      - name: Report
+        if: ${{ always() && inputs.report }}
+        uses: pastelhk/.github/.github/actions/code-scan-report@feat/code-scan-composable-report
         with:
-          script: |
-            const MARKER = '<!-- code-scan-report -->';
-            const LOG_START = '<!-- log-start -->';
-            const LOG_END = '<!-- log-end -->';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body?.includes(MARKER));
-            if (!existing) return;
-
-            // A newer run may have taken over the banner — if so, leave it alone (no race, no clobber).
-            if (!existing.body.includes(`Running…** — [#${context.runNumber}]`)) return;
-
-            // preserve prior log rows; do NOT append a line for a cancelled run
-            let logBlock = '';
-            const s = existing.body.indexOf(LOG_START), e = existing.body.indexOf(LOG_END);
-            if (s >= 0 && e > s) {
-              const lines = existing.body.slice(s + LOG_START.length, e)
-                .split('\n').map(l => l.trim())
-                .filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.startsWith('| Result |'));
-              if (lines.length) {
-                logBlock =
-                  `\n\n<details><summary>📜 Run log (${lines.length})</summary>\n\n` +
-                  `${LOG_START}\n\n| Result | Run | Commit | When |\n|--|--|--|--|\n` +
-                  `${lines.join('\n')}\n\n${LOG_END}\n\n</details>`;
-              }
-            }
-
-            const cancelledBlock = `## 📋 Code Scan Results\n\n🚫 **Cancelled** (superseded or stopped) — [#${context.runNumber}](${runUrl})`;
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: `${MARKER}\n${cancelledBlock}${logBlock}`,
-            });
+          results: ${{ steps.collect.outputs.results }}
+          jobs: '{"checks":{"result":"${{ needs.checks.result }}"}}'
+          pr-comment: ${{ inputs.pr-comment }}
