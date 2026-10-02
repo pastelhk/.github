@@ -167,7 +167,9 @@ jobs:
       contents: read
       checks: write
       pull-requests: write # pending banner
-    secrets: inherit
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      PRIVATE_NPM_REGISTRY_PASSWORD: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 
   tests:
     # your own job(s)
