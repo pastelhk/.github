@@ -3,7 +3,9 @@ description: Render code scan results to the job summary and the sticky PR comme
 
 inputs:
   results:
-    description: 'JSON array of { name, outcome, isWarning?, optional? }; outcome is a step outcome or job result'
+    description: >
+      JSON array of { name, outcome, isWarning?, optional? }, or an array of such arrays (one per job).
+      Same-named rows merge: failure beats success beats skipped.
     required: true
   extra-results:
     description: 'JSON array in the same shape; replaces same-named rows of `results`, else appended (e.g. caller-owned Tests)'
@@ -31,9 +33,26 @@ runs:
         PR_COMMENT: ${{ inputs.pr-comment }}
       with:
         script: |
-          // An upstream job that died before collecting leaves RESULTS empty; JOBS then fails the report.
-          const base = JSON.parse(process.env.RESULTS || '[]');
-          const extra = JSON.parse(process.env.EXTRA_RESULTS || '[]');
+          // An upstream job that died before collecting leaves its set empty; JOBS then fails the report.
+          let invalidInput = false;
+          const parse = (label, raw) => {
+            try {
+              return [JSON.parse(raw || '[]')].flat(2);
+            } catch (error) {
+              core.error(`${label} is not valid JSON (${error.message}): ${raw}`);
+              invalidInput = true;
+              return [];
+            }
+          };
+          // Several sets may name the same check: failure beats success beats skipped, so none is hidden.
+          const rank = c => ({ failure: 2, success: 1 })[c.outcome] ?? 0;
+          const base = [];
+          for (const c of parse('results', process.env.RESULTS)) {
+            const i = base.findIndex(b => b.name === c.name);
+            if (i < 0) base.push(c);
+            else if (rank(c) > rank(base[i])) base[i] = c;
+          }
+          const extra = parse('extra-results', process.env.EXTRA_RESULTS);
           // An extra result replaces the same-named row in place (e.g. caller-owned Tests over a skipped one).
           const extraByName = new Map(extra.map(c => [c.name, c]));
           const checks = [
@@ -59,7 +78,7 @@ runs:
           const anyBlocked = results.some(r => r.blocked);
           const anySkipped = results.some(r => !r.ran && !r.optional);
           // covers a job failing before any check step runs (install, checkout, timeout)
-          const jobFailed = Object.values(JSON.parse(process.env.JOBS || '{}'))
+          const jobFailed = invalidInput || Object.values(JSON.parse(process.env.JOBS || '{}'))
             .some(j => j.result === 'failure' || j.result === 'cancelled');
 
           console.log('\n📋 Code Scan Results\n');

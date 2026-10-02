@@ -1,0 +1,194 @@
+name: Code Scan Run
+description: Run selected code scan checks after code-scan-setup and report each one's outcome
+
+inputs:
+  checks:
+    description: >
+      Comma- or space-separated checks: lockfile, hoisting, audit, packages, format, types, lint, tests.
+      They always run in that order; a lockfile failure skips the rest.
+    required: true
+  workspaces:
+    description: 'Space-separated workspace paths for `tests`; empty runs the root `npm run check:test`'
+    required: false
+    default: ''
+  exclude-workspaces:
+    description: 'Space-separated workspace paths; `tests` runs every other workspace (npm workspaces only)'
+    required: false
+    default: ''
+
+outputs:
+  results:
+    description: 'JSON array of { name, outcome, isWarning, optional }, the input shape of code-scan-report.yml'
+    value: ${{ steps.run.outputs.results }}
+  outcomes:
+    description: 'JSON object of check → success | failure | skipped'
+    value: ${{ steps.run.outputs.outcomes }}
+  outcome:
+    description: 'The outcome when exactly one check was selected'
+    value: ${{ steps.run.outputs.outcome }}
+  is-workspace:
+    description: "'true' when package.json declares npm workspaces"
+    value: ${{ steps.run.outputs.is-workspace }}
+
+runs:
+  using: composite
+  steps:
+    - name: Cache ESLint caches
+      if: contains(inputs.checks, 'lint')
+      uses: actions/cache@v6
+      # `**/…` and hashFiles('**/…') walk node_modules too (measured 15-65s/run).
+      # The sha suffix makes the cache actually refresh instead of never saving.
+      with:
+        path: |
+          .eslintcache
+          */*/.eslintcache
+          !node_modules/**
+        key: ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-
+          ${{ runner.os }}-eslint-
+
+    - name: Cache TS Build Info caches
+      if: contains(inputs.checks, 'types')
+      uses: actions/cache@v6
+      with:
+        path: |
+          tsconfig.tsbuildinfo
+          */*/tsconfig.tsbuildinfo
+          !node_modules/**
+        key: ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-
+          ${{ runner.os }}-tsbuildinfo-
+
+    # Records every outcome and exits 0; the next step fails the action, so outputs are always set.
+    - name: Run checks
+      id: run
+      shell: bash
+      env:
+        CHECKS: ${{ inputs.checks }}
+        WORKSPACES: ${{ inputs.workspaces }}
+        EXCLUDE_WORKSPACES: ${{ inputs.exclude-workspaces }}
+      run: |
+        set +e
+        ORDER='lockfile hoisting audit packages format types lint tests'
+        label() {
+          case $1 in
+            lockfile) echo 'Lock file' ;; hoisting) echo 'Hoisting' ;; audit) echo 'Audit' ;;
+            packages) echo 'Package.json' ;; format) echo 'Format' ;; types) echo 'Types' ;;
+            lint) echo 'Lint' ;; tests) echo 'Tests' ;; *) return 1 ;;
+          esac
+        }
+        WANT=' ' COUNT=0
+        for c in ${CHECKS//,/ }; do
+          if ! label "$c" > /dev/null; then
+            echo "::error::Unknown check '$c'. Valid: $ORDER"
+            exit 1
+          fi
+          case $WANT in *" $c "*) ;; *) WANT+="$c " COUNT=$((COUNT + 1)) ;; esac
+        done
+
+        IS_WS=false
+        # npm/yarn workspaces: array form or { packages: [...] } object form
+        if [ -f package.json ] && node -e "const w=require('./package.json').workspaces; process.exit(((Array.isArray(w)&&w.length)||(w&&Array.isArray(w.packages)&&w.packages.length))?0:1)"; then
+          IS_WS=true
+        fi
+
+        # Return 0 = success, 1 = failure, 2 = skipped (not applicable here).
+        check_lockfile() {
+          if ! git --no-pager diff --exit-code; then
+            echo "::error::package-lock.json drifted. Run 'npm install' locally and commit the lockfile."
+            return 1
+          fi
+        }
+        check_hoisting() {
+          [ "$IS_WS" = true ] || return 2
+          echo "🔍 Scanning for any nested node_modules folders..."
+          NESTED=$(find . -mindepth 2 -name node_modules -type d ! -path './node_modules/*' 2>/dev/null)
+          if [ -z "$NESTED" ]; then
+            echo "✅ Perfect hoisting — no nested node_modules anywhere!"
+            return 0
+          fi
+          echo "⚠️  Nested node_modules found:"
+          echo "$NESTED"
+          echo ""
+          echo "Checking for real packages (looking for package.json files)..."
+          REAL_PKGS=$(find . -path '*/node_modules/*/package.json' \
+            ! -path './node_modules/*' \
+            ! -path '*/node_modules/.*/*' \
+            2>/dev/null)
+          if [ -n "$REAL_PKGS" ]; then
+            echo "❌ Found non-hoisted dependencies:"
+            echo "$REAL_PKGS" | sed 's|/package.json||' | sort | uniq
+            echo ""
+            echo "💡 Fix: Ensure 'install-strategy=hoisted' in .npmrc and shared deps in root package.json"
+            return 1
+          fi
+          echo "✅ Only build tool artifacts found (safe to ignore)"
+        }
+        check_audit() {
+          [ "$GITHUB_ACTOR" != 'dependabot[bot]' ] || return 2
+          npm audit --omit=dev
+        }
+        check_packages() { npm run check:packages; }
+        check_format() { npm run check:format; }
+        check_types() { npm run check:types; }
+        check_lint() { npm run check:lint; }
+        check_tests() {
+          local list="$WORKSPACES"
+          if [ -n "$EXCLUDE_WORKSPACES" ]; then
+            [ "$IS_WS" = true ] || { echo "::error::exclude-workspaces needs npm workspaces"; return 1; }
+            list=$(npm query .workspace | node -e '
+              const skip = new Set(process.argv[1].split(" ").filter(Boolean));
+              const all = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              console.log(all.map(w => w.location).filter(l => !skip.has(l)).join(" "));
+            ' "$EXCLUDE_WORKSPACES") || return 1
+            [ -n "$list" ] || { echo "::notice::Every workspace is excluded; nothing to test"; return 2; }
+          fi
+          if [ -z "$list" ]; then
+            npm run check:test
+            return
+          fi
+          read -ra W <<< "$list"
+          npm run check:test --if-present "${W[@]/#/--workspace=}"
+        }
+
+        OUTCOMES='' RESULTS='' FAILED=false STOP=false outcome=''
+        for c in $ORDER; do
+          case $WANT in *" $c "*) ;; *) continue ;; esac
+          name=$(label "$c")
+          if [ "$STOP" = true ]; then
+            outcome=skipped
+          else
+            echo "::group::$name"
+            "check_$c"
+            rc=$?
+            echo "::endgroup::"
+            case $rc in 0) outcome=success ;; 2) outcome=skipped ;; *) outcome=failure ;; esac
+          fi
+          warn=false optional=false
+          [ "$c" = audit ] && warn=true optional=true
+          [ "$c" = hoisting ] && [ "$IS_WS" != true ] && optional=true
+          # Audit is a warning: it shows ⚠️ but never fails the action or the job.
+          [ "$outcome" = failure ] && [ "$warn" = false ] && FAILED=true
+          [ "$c" = lockfile ] && [ "$outcome" = failure ] && STOP=true
+          OUTCOMES+="\"$c\":\"$outcome\","
+          RESULTS+="{\"name\":\"$name\",\"outcome\":\"$outcome\",\"isWarning\":$warn,\"optional\":$optional},"
+        done
+
+        {
+          echo "results=[${RESULTS%,}]"
+          echo "outcomes={${OUTCOMES%,}}"
+          echo "is-workspace=$IS_WS"
+          echo "failed=$FAILED"
+          if [ "$COUNT" -eq 1 ]; then echo "outcome=$outcome"; fi
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Fail on a blocking check
+      if: steps.run.outputs.failed == 'true'
+      shell: bash
+      env:
+        OUTCOMES: ${{ steps.run.outputs.outcomes }}
+      run: |
+        echo "::error::Blocking check failed: $OUTCOMES"
+        exit 1

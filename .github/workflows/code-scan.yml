@@ -88,16 +88,18 @@ jobs:
       checks: write
       pull-requests: write
 
+    # The action's own outcome wins: it says `skipped` for hoisting outside a workspace and for
+    # dependabot's audit, and keeps audit's `failure` (a warning, so the step itself passes).
     outputs:
-      lockfile: ${{ steps.check-lockfile.outcome }}
-      audit: ${{ steps.check-audit.outcome }}
-      packages: ${{ steps.check-packages.outcome }}
-      hoisting: ${{ steps.check-hoisting.outcome }}
-      is-workspace: ${{ steps.detect-workspace.outputs.is-workspace }}
-      format: ${{ steps.check-format.outcome }}
-      types: ${{ steps.check-types.outcome }}
-      lint: ${{ steps.check-lint.outcome }}
-      tests: ${{ steps.check-test.outcome }}
+      lockfile: ${{ steps.check-lockfile.outputs.outcome || steps.check-lockfile.outcome }}
+      audit: ${{ steps.check-audit.outputs.outcome || steps.check-audit.outcome }}
+      packages: ${{ steps.check-packages.outputs.outcome || steps.check-packages.outcome }}
+      hoisting: ${{ steps.check-hoisting.outputs.outcome || steps.check-hoisting.outcome }}
+      is-workspace: ${{ steps.check-hoisting.outputs.is-workspace }}
+      format: ${{ steps.check-format.outputs.outcome || steps.check-format.outcome }}
+      types: ${{ steps.check-types.outputs.outcome || steps.check-types.outcome }}
+      lint: ${{ steps.check-lint.outputs.outcome || steps.check-lint.outcome }}
+      tests: ${{ steps.check-test.outputs.outcome || steps.check-test.outcome }}
 
     steps:
       - name: Post pending comment
@@ -151,149 +153,75 @@ jobs:
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
 
-      - uses: actions/checkout@v7
-
-      - uses: pastelhk/.github/.github/actions/npm-init@v1
+      - name: Set up
+        uses: pastelhk/.github/.github/actions/code-scan-setup@feat/code-scan-composable-checks
         with:
-          restore-packages: false
-          package-cache: 'false'
+          extra-install-cache-paths: ${{ inputs.extra-install-cache-paths }}
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 
-      # Lockfile + Node version + arch key (no sha — wants a hit across commits).
-      # .nvmrc is in the key so a Node bump alone still misses: some native deps are Node-ABI-specific.
-      # restore-keys falls back to the nearest prefix match on a lockfile-hash miss — npm install
-      # below still runs and reconciles the delta, so lockfile-drift detection is unaffected.
-      - name: Cache node_modules
-        uses: actions/cache@v6
-        with:
-          path: |
-            node_modules
-            ${{ inputs.extra-install-cache-paths }}
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-node-modules-
-
-      # Intentionally use `npm install` instead of `npm ci` to detect updates to lock file
-      - name: Install dependencies
-        run: npm install
-
+      # No continue-on-error: a drifted lockfile stops the job, as before.
       - name: Check lock file clean
         id: check-lockfile
-        run: |
-          if ! git --no-pager diff --exit-code; then
-            echo "::error::package-lock.json drifted. Run 'npm install' locally and commit the lockfile."
-            exit 1
-          fi
-
-      - name: Detect workspace (for hoisting)
-        if: inputs.run-hoisting
-        id: detect-workspace
-        run: |
-          IS_WS=false
-          # npm/yarn workspaces: array form or { packages: [...] } object form
-          if [ -f package.json ] && node -e "const w=require('./package.json').workspaces; process.exit(((Array.isArray(w)&&w.length)||(w&&Array.isArray(w.packages)&&w.packages.length))?0:1)"; then
-            IS_WS=true
-          fi
-          echo "is-workspace=$IS_WS" >> "$GITHUB_OUTPUT"
-          echo "🔎 Hoisting mode: $IS_WS"
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: lockfile
 
       - name: Verify hoisting
         id: check-hoisting
-        if: inputs.run-hoisting && steps.detect-workspace.outputs.is-workspace == 'true'
-        run: |
-          echo "🔍 Scanning for any nested node_modules folders..."
-
-          # Find nested node_modules, excluding root and its contents
-          NESTED=$(find . -mindepth 2 -name node_modules -type d ! -path './node_modules/*' 2>/dev/null || true)
-
-          if [ -n "$NESTED" ]; then
-            echo "⚠️  Nested node_modules found:"
-            echo "$NESTED"
-            echo ""
-            echo "Checking for real packages (looking for package.json files)..."
-
-            # Look for package.json in nested node_modules (indicates real packages)
-            REAL_PKGS=$(find . -path '*/node_modules/*/package.json' \
-              ! -path './node_modules/*' \
-              ! -path '*/node_modules/.*/*' \
-              2>/dev/null || true)
-
-            if [ -n "$REAL_PKGS" ]; then
-              echo "❌ Found non-hoisted dependencies:"
-              echo "$REAL_PKGS" | sed 's|/package.json||' | sort | uniq
-              echo ""
-              echo "💡 Fix: Ensure 'install-strategy=hoisted' in .npmrc and shared deps in root package.json"
-              exit 1
-            else
-              echo "✅ Only build tool artifacts found (safe to ignore)"
-            fi
-          else
-            echo "✅ Perfect hoisting — no nested node_modules anywhere!"
-          fi
+        if: inputs.run-hoisting
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: hoisting
         continue-on-error: true
 
-      # `**/…` and hashFiles('**/…') walk node_modules too (measured 15-65s/run).
-      # The sha suffix makes the cache actually refresh instead of never saving.
-      - name: Cache ESLint caches
-        uses: actions/cache@v6
-        with:
-          path: |
-            .eslintcache
-            */*/.eslintcache
-            !node_modules/**
-          key: ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-eslint-${{ hashFiles('package-lock.json') }}-
-            ${{ runner.os }}-eslint-
-
-      - name: Cache TS Build Info caches
-        uses: actions/cache@v6
-        with:
-          path: |
-            tsconfig.tsbuildinfo
-            */*/tsconfig.tsbuildinfo
-            !node_modules/**
-          key: ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-tsbuildinfo-${{ hashFiles('package-lock.json') }}-
-            ${{ runner.os }}-tsbuildinfo-
-
       - name: Check for vulnerabilities in dependencies
-        if: inputs.run-audit && github.actor != 'dependabot[bot]'
         id: check-audit
-        run: npm audit --omit=dev
+        if: inputs.run-audit && github.actor != 'dependabot[bot]'
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: audit
         continue-on-error: true
 
       - name: Check package.json
-        if: inputs.run-packages
         id: check-packages
-        run: npm run check:packages
+        if: inputs.run-packages
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: packages
         continue-on-error: true
 
       - name: Check Format
-        if: inputs.run-format
         id: check-format
-        run: npm run check:format
+        if: inputs.run-format
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: format
         continue-on-error: true
 
       - name: Check Type
-        if: inputs.run-types
         id: check-types
-        run: npm run check:types
+        if: inputs.run-types
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: types
         continue-on-error: true
 
       - name: Check Lint
-        if: inputs.run-lint
         id: check-lint
-        run: npm run check:lint
+        if: inputs.run-lint
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: lint
         continue-on-error: true
 
       - name: Run Tests
         id: check-test
         if: inputs.run-tests
-        run: npm run check:test
+        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-checks
+        with:
+          checks: tests
         continue-on-error: true
 
       - name: Test Report
@@ -318,61 +246,24 @@ jobs:
       sonar: ${{ steps.check-sonarqube.outcome }}
 
     steps:
-      # SonarQube's new-code/blame analysis needs full history; `checks` doesn't.
-      - uses: actions/checkout@v7
+      # SonarQube's new-code/blame analysis needs full history, and SonarJS's type-aware
+      # rules resolve imports through node_modules, so this needs a real install too.
+      - name: Set up
+        uses: pastelhk/.github/.github/actions/code-scan-setup@feat/code-scan-composable-checks
         with:
           fetch-depth: 0
-
-      - uses: pastelhk/.github/.github/actions/npm-init@v1
-        with:
-          restore-packages: false
-          package-cache: 'false'
+          extra-install-cache-paths: ${{ inputs.extra-install-cache-paths }}
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
           registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
 
-      - name: Cache node_modules
-        uses: actions/cache@v6
-        with:
-          path: |
-            node_modules
-            ${{ inputs.extra-install-cache-paths }}
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**', '.nvmrc') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-node-modules-
-
-      # SonarJS's type-aware rules resolve imports through node_modules — needs a real
-      # install, not just the checkout, or findings can silently change.
-      - name: Install dependencies
-        run: npm install
-
-      # Keyed on the pinned action version below, not a bare OS name, so bumping the
-      # scanner action actually rotates the cache instead of serving a stale scanner forever.
-      - name: Cache SonarQube scanner
-        uses: actions/cache@v6
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar-v8.2.1
-          restore-keys: ${{ runner.os }}-sonar-
-
-      # Sonar rejects projectVersion > 100 chars; '-' + 40-char sha leaves 59 for the ref.
-      - name: Compute Sonar project version
-        id: sonar-version
-        env:
-          REF: ${{ github.head_ref || github.ref_name }}
-        run: echo "value=${REF:0:59}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: SonarQube Scan
         id: check-sonarqube
-        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
-        env:
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          PROJECT_VERSION: ${{ steps.sonar-version.outputs.value }}
+        uses: pastelhk/.github/.github/actions/code-scan-sonar@feat/code-scan-composable-checks
         with:
-          args: >
-            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
-            -Dsonar.projectVersion=${{ env.PROJECT_VERSION }}
+          host-url: ${{ vars.SONAR_HOST_URL }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          project-key: ${{ vars.SONAR_PROJECT_KEY }}
         continue-on-error: true
 
   report:
@@ -426,7 +317,7 @@ jobs:
       # Runs on cancel too, so the action can mark the banner cancelled.
       - name: Report
         if: ${{ always() && inputs.report }}
-        uses: pastelhk/.github/.github/actions/code-scan-report@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-report@feat/code-scan-composable-checks
         with:
           results: ${{ steps.collect.outputs.results }}
           jobs: '{"checks":{"result":"${{ needs.checks.result }}"}}'
