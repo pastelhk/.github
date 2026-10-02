@@ -81,11 +81,17 @@ comment that is updated in place and keeps a short run history.
 | `run-types`    | boolean | `true`  | Run `npm run check:types`         |
 | `run-lint`     | boolean | `true`  | Run `npm run check:lint`          |
 | `run-tests`    | boolean | `true`  | Run `npm run check:test`          |
+| `test-groups`  | string  | `''`    | Parallel test jobs (see below)    |
 | `run-audit`    | boolean | `true`  | Run `npm audit --omit=dev`        |
 | `run-sonar`    | boolean | `true`  | Run SonarQube scan                |
 | `run-hoisting` | boolean | `true`  | Verify workspace package hoisting |
 | `pr-comment`   | boolean | `true`  | Post/update a sticky PR comment   |
 | `timeout`      | number  | `12`    | Job timeout in minutes            |
+
+`test-groups` (npm workspaces only) moves tests out of `checks` into one
+`Tests (<group>)` job per entry, still gated by `Code Scan`. Each entry is
+space-separated workspace paths; `*` is every workspace not named in another
+entry, e.g. `'["apps/web-portal", "*"]'`. Empty keeps tests in `checks`.
 
 **Secrets and variables**
 
