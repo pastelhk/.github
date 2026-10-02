@@ -1,0 +1,43 @@
+name: Code Scan SonarQube
+description: Run the SonarQube scan after code-scan-setup with fetch-depth 0
+
+inputs:
+  host-url:
+    description: 'SonarQube host (vars.SONAR_HOST_URL)'
+    required: true
+  token:
+    description: 'SonarQube token (secrets.SONAR_TOKEN)'
+    required: true
+  project-key:
+    description: 'SonarQube project key (vars.SONAR_PROJECT_KEY, repository level)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Keyed on the pinned action version below, not a bare OS name, so bumping the
+    # scanner action actually rotates the cache instead of serving a stale scanner forever.
+    - name: Cache SonarQube scanner
+      uses: actions/cache@v6
+      with:
+        path: ~/.sonar/cache
+        key: ${{ runner.os }}-sonar-v8.2.1
+        restore-keys: ${{ runner.os }}-sonar-
+
+    # Sonar rejects projectVersion > 100 chars; '-' + 40-char sha leaves 59 for the ref.
+    - name: Compute Sonar project version
+      id: sonar-version
+      shell: bash
+      env:
+        REF: ${{ github.head_ref || github.ref_name }}
+      run: echo "value=${REF:0:59}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+      env:
+        SONAR_HOST_URL: ${{ inputs.host-url }}
+        SONAR_TOKEN: ${{ inputs.token }}
+      with:
+        args: >
+          -Dsonar.projectKey=${{ inputs.project-key }}
+          -Dsonar.projectVersion=${{ steps.sonar-version.outputs.value }}

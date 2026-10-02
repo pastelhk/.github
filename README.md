@@ -85,6 +85,7 @@ comment that is updated in place and keeps a short run history.
 | `run-sonar`    | boolean | `true`  | Run SonarQube scan                |
 | `run-hoisting` | boolean | `true`  | Verify workspace package hoisting |
 | `pr-comment`   | boolean | `true`  | Post/update a sticky PR comment   |
+| `report`       | boolean | `true`  | Own the `Code Scan` check         |
 | `timeout`      | number  | `12`    | Job timeout in minutes            |
 
 **Secrets and variables**
@@ -144,6 +145,84 @@ check still appears under the same name. This is expected, not a failure.
 
 Fork pull requests receive a read-only token regardless of what the caller  
 declares, so the comment and check-run steps degrade on external contributions.
+
+### `code-scan-report.yml`
+
+Renders results into the job summary and the sticky comment, and fails the
+`Code Scan` check on a blocking result. Use it when you run some work in your
+own jobs (e.g. tests split per workspace) and still want one required check.
+
+Set `report: false` on `code-scan.yml`, rename that job, and report from a job
+named `Code Scan` so the check stays `Code Scan / Code Scan`:
+
+```yaml
+jobs:
+  scan:
+    name: Scan
+    uses: pastelhk/.github/.github/workflows/code-scan.yml@v1
+    with:
+      report: false
+      run-tests: false
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write # pending banner
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      PRIVATE_NPM_REGISTRY_PASSWORD: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+
+  tests:
+    name: Tests (${{ matrix.workspace }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [apps/web-portal, packages/api-service]
+    steps:
+      - uses: pastelhk/.github/.github/actions/code-scan-setup@v1
+        with:
+          registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
+          registry-username: ${{ vars.PRIVATE_NPM_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.PRIVATE_NPM_REGISTRY_PASSWORD }}
+      - uses: pastelhk/.github/.github/actions/code-scan-run@v1
+        with:
+          checks: tests
+          workspaces: ${{ matrix.workspace }}
+
+  report:
+    name: Code Scan
+    needs: [scan, tests]
+    if: always()
+    uses: pastelhk/.github/.github/workflows/code-scan-report.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write # sticky comment; a 403 fails the check
+    with:
+      results: ${{ needs.scan.outputs.results }}
+      extra-results: '[{"name":"Tests","outcome":"${{ needs.tests.result }}"}]'
+      jobs: ${{ toJSON(needs) }}
+```
+
+| Input           | Type    | Default | Description                                                      |
+| --------------- | ------- | ------- | ---------------------------------------------------------------- |
+| `results`       | string  | —       | A `results` output, or an array of them (see below)              |
+| `extra-results` | string  | `[]`    | `{ name, outcome, isWarning?, optional? }[]`; replaces same name |
+| `jobs`          | string  | `{}`    | `toJSON(needs)`; a failed or cancelled job fails the report      |
+| `pr-comment`    | boolean | `true`  | Post/update the sticky PR comment                                |
+
+A matrix job's outputs keep only one leg, so report a matrix through
+`extra-results` and `needs.<job>.result`, as above. Several single jobs that
+each expose `code-scan-run`'s `results` can be merged into one table; a skipped
+job has an empty output, so default it:
+
+```yaml
+results: "[${{ needs.scan.outputs.results || '[]' }}, ${{ needs.lint.outputs.results || '[]' }}]"
+```
+
+Rows with the same name merge as failure over success over skipped, so a
+failure is never hidden. Invalid JSON fails the report.
 
 ### `dependabot-auto-merge.yml`
 
@@ -259,6 +338,23 @@ the action, and the repository working tree is never modified. Do not "simplify"
 this by writing `.npmrc` into the checkout — that reintroduces false positives in
 the lock-file drift check.  
 ​
+
+### `code-scan-setup`, `code-scan-run`, `code-scan-sonar`, `code-scan-report`
+
+The building blocks of `code-scan.yml`, for callers that split its checks
+across their own jobs. Composite actions cannot read `secrets` or `vars`, so
+pass them as inputs.
+
+| Action             | Inputs                                                                               | Does                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `code-scan-setup`  | `fetch-depth` (`1`), `extra-install-cache-paths`, `registry-url/-username/-password` | Checkout, `npm-init`, cached `npm install`                                             |
+| `code-scan-run`    | `checks`, `workspaces`, `exclude-workspaces`                                         | Runs the listed checks in a fixed order; outputs `results`, `outcomes`, `outcome`      |
+| `code-scan-sonar`  | `host-url`, `token`, `project-key`                                                   | SonarQube scan; needs `code-scan-setup` with `fetch-depth: 0`                          |
+| `code-scan-report` | `results`, `extra-results`, `jobs`, `pr-comment`                                     | What `code-scan-report.yml` runs; use the workflow so the check name stays `Code Scan` |
+
+`checks` takes `lockfile`, `hoisting`, `audit`, `packages`, `format`, `types`,
+`lint` and `tests`. A lockfile failure skips the rest; audit is a warning and
+never fails the step. `workspaces` and `exclude-workspaces` apply to `tests`.
 
 ### `scan-comment`
 
