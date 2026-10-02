@@ -1,0 +1,41 @@
+name: Code Scan Report
+
+on:
+  workflow_call:
+    inputs:
+      results:
+        description: "JSON array of { name, outcome, isWarning?, optional? } — usually code-scan.yml's `results` output"
+        type: string
+        required: true
+      extra-results:
+        description: 'JSON array in the same shape for caller-owned jobs, e.g. [{"name":"Tests","outcome":"success"}]'
+        type: string
+        default: '[]'
+      jobs:
+        description: 'toJSON(needs) of the calling job; any failed or cancelled job fails the report'
+        type: string
+        default: '{}'
+      pr-comment:
+        description: 'Post/update the sticky PR comment (needs pull-requests: write on the caller job)'
+        type: boolean
+        default: true
+
+jobs:
+  report:
+    name: Code Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Report
+        if: always()
+        uses: pastelhk/.github/.github/actions/code-scan-report@feat/code-scan-composable-report
+        with:
+          results: ${{ inputs.results }}
+          extra-results: ${{ inputs.extra-results }}
+          jobs: ${{ inputs.jobs }}
+          pr-comment: ${{ inputs.pr-comment }}
