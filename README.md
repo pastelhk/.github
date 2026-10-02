@@ -85,6 +85,7 @@ comment that is updated in place and keeps a short run history.
 | `run-sonar`    | boolean | `true`  | Run SonarQube scan                |
 | `run-hoisting` | boolean | `true`  | Verify workspace package hoisting |
 | `pr-comment`   | boolean | `true`  | Post/update a sticky PR comment   |
+| `report`       | boolean | `true`  | Own the `Code Scan` check         |
 | `timeout`      | number  | `12`    | Job timeout in minutes            |
 
 **Secrets and variables**
@@ -144,6 +145,53 @@ check still appears under the same name. This is expected, not a failure.
 
 Fork pull requests receive a read-only token regardless of what the caller  
 declares, so the comment and check-run steps degrade on external contributions.
+
+### `code-scan-report.yml`
+
+Renders results into the job summary and the sticky comment, and fails the
+`Code Scan` check on a blocking result. Use it when you run some work in your
+own jobs (e.g. tests split per workspace) and still want one required check.
+
+Set `report: false` on `code-scan.yml`, rename that job, and report from a job
+named `Code Scan` so the check stays `Code Scan / Code Scan`:
+
+```yaml
+jobs:
+  scan:
+    name: Scan
+    uses: pastelhk/.github/.github/workflows/code-scan.yml@v1
+    with:
+      report: false
+      run-tests: false
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write # pending banner
+    secrets: inherit
+
+  tests:
+    # your own job(s)
+
+  report:
+    name: Code Scan
+    needs: [scan, tests]
+    if: always()
+    uses: pastelhk/.github/.github/workflows/code-scan-report.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write # sticky comment; a 403 fails the check
+    with:
+      results: ${{ needs.scan.outputs.results }}
+      extra-results: '[{"name":"Tests","outcome":"${{ needs.tests.result }}"}]'
+      jobs: ${{ toJSON(needs) }}
+```
+
+| Input           | Type    | Default | Description                                                      |
+| --------------- | ------- | ------- | ---------------------------------------------------------------- |
+| `results`       | string  | —       | `code-scan.yml`'s `results` output                               |
+| `extra-results` | string  | `[]`    | `{ name, outcome, isWarning?, optional? }[]`; replaces same name |
+| `jobs`          | string  | `{}`    | `toJSON(needs)`; a failed or cancelled job fails the report      |
+| `pr-comment`    | boolean | `true`  | Post/update the sticky PR comment                                |
 
 ### `dependabot-auto-merge.yml`
 
