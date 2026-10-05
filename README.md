@@ -21,7 +21,6 @@ jobs:
     uses: pastelhk/.github/.github/workflows/code-scan.yml@v1
     permissions:
       contents: read
-      checks: write
       pull-requests: write
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -122,7 +121,6 @@ jobs:
     uses: pastelhk/.github/.github/workflows/code-scan.yml@v1
     permissions:
       contents: read # checkout + Sonar blame (fetch-depth: 0)
-      checks: write # dorny/test-reporter check run
       pull-requests: write # sticky PR comment (drop if pr-comment: false)
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -136,15 +134,14 @@ check still appears under the same name. This is expected, not a failure.
 **Least-privilege variants**
 ​
 
-| Configuration       | Permissions needed                                        |
-| ------------------- | --------------------------------------------------------- |
-| Default             | `contents: read`, `checks: write`, `pull-requests: write` |
-| `pr-comment: false` | drop `pull-requests: write`                               |
-| `run-tests: false`  | drop `checks: write`                                      |
-| Both disabled       | `contents: read` only                                     |
+| Configuration       | Permissions needed                       |
+| ------------------- | ---------------------------------------- |
+| Default             | `contents: read`, `pull-requests: write` |
+| `pr-comment: false` | `contents: read` only                    |
 
 Fork pull requests receive a read-only token regardless of what the caller  
-declares, so the comment and check-run steps degrade on external contributions.
+declares, so the sticky comment degrades on external contributions. The test
+report goes to the job summary and needs no write scope.
 
 ### `code-scan-report.yml`
 
@@ -165,7 +162,6 @@ jobs:
       run-tests: false
     permissions:
       contents: read
-      checks: write
       pull-requests: write # pending banner
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
