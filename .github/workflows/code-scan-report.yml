@@ -33,7 +33,7 @@ jobs:
     steps:
       - name: Report
         if: always()
-        uses: pastelhk/.github/.github/actions/code-scan-report@v1
+        uses: pastelhk/.github/.github/actions/code-scan-report@fix/code-scan-cancel-detection
         with:
           results: ${{ inputs.results }}
           extra-results: ${{ inputs.extra-results }}
