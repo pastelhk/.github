@@ -154,7 +154,7 @@ jobs:
             }
 
       - name: Set up
-        uses: pastelhk/.github/.github/actions/code-scan-setup@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-setup@v1
         with:
           extra-install-cache-paths: ${{ inputs.extra-install-cache-paths }}
           registry-url: ${{ vars.PRIVATE_NPM_REGISTRY_URL }}
@@ -164,14 +164,14 @@ jobs:
       # No continue-on-error: a drifted lockfile stops the job, as before.
       - name: Check lock file clean
         id: check-lockfile
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: lockfile
 
       - name: Verify hoisting
         id: check-hoisting
         if: inputs.run-hoisting
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: hoisting
         continue-on-error: true
@@ -179,7 +179,7 @@ jobs:
       - name: Check for vulnerabilities in dependencies
         id: check-audit
         if: inputs.run-audit && github.actor != 'dependabot[bot]'
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: audit
         continue-on-error: true
@@ -187,7 +187,7 @@ jobs:
       - name: Check package.json
         id: check-packages
         if: inputs.run-packages
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: packages
         continue-on-error: true
@@ -195,7 +195,7 @@ jobs:
       - name: Check Format
         id: check-format
         if: inputs.run-format
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: format
         continue-on-error: true
@@ -203,7 +203,7 @@ jobs:
       - name: Check Type
         id: check-types
         if: inputs.run-types
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: types
         continue-on-error: true
@@ -211,7 +211,7 @@ jobs:
       - name: Check Lint
         id: check-lint
         if: inputs.run-lint
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: lint
         continue-on-error: true
@@ -219,7 +219,7 @@ jobs:
       - name: Run Tests
         id: check-test
         if: inputs.run-tests
-        uses: pastelhk/.github/.github/actions/code-scan-run@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-run@v1
         with:
           checks: tests
         continue-on-error: true
@@ -249,7 +249,7 @@ jobs:
       # SonarQube's new-code/blame analysis needs full history, and SonarJS's type-aware
       # rules resolve imports through node_modules, so this needs a real install too.
       - name: Set up
-        uses: pastelhk/.github/.github/actions/code-scan-setup@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-setup@v1
         with:
           fetch-depth: 0
           extra-install-cache-paths: ${{ inputs.extra-install-cache-paths }}
@@ -259,7 +259,7 @@ jobs:
 
       - name: SonarQube Scan
         id: check-sonarqube
-        uses: pastelhk/.github/.github/actions/code-scan-sonar@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-sonar@v1
         with:
           host-url: ${{ vars.SONAR_HOST_URL }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -317,7 +317,7 @@ jobs:
       # Runs on cancel too, so the action can mark the banner cancelled.
       - name: Report
         if: ${{ always() && inputs.report }}
-        uses: pastelhk/.github/.github/actions/code-scan-report@feat/code-scan-composable-report
+        uses: pastelhk/.github/.github/actions/code-scan-report@v1
         with:
           results: ${{ steps.collect.outputs.results }}
           jobs: '{"checks":{"result":"${{ needs.checks.result }}"}}'
