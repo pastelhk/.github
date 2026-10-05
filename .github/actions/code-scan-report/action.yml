@@ -23,8 +23,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # A report job that starts after the run was cancelled sees cancelled() false; the jobs' results still say so.
+    - name: Detect cancellation
+      id: state
+      shell: bash
+      env:
+        JOBS: ${{ inputs.jobs }}
+      run: |
+        c=$(jq -r 'any(.[]?; .result == "cancelled")' <<< "${JOBS:-"{}"}" 2> /dev/null) || c=false
+        echo "cancelled=$c" >> "$GITHUB_OUTPUT"
+
     - name: Generate Results Report
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.state.outputs.cancelled != 'true' }}
       uses: actions/github-script@v9
       env:
         RESULTS: ${{ inputs.results }}
@@ -162,7 +172,7 @@ runs:
 
     # ── Cancellation: only touch the comment if THIS run still owns the banner ──
     - name: Mark cancelled
-      if: ${{ cancelled() && github.event_name == 'pull_request' && inputs.pr-comment == 'true' }}
+      if: ${{ (cancelled() || steps.state.outputs.cancelled == 'true') && github.event_name == 'pull_request' && inputs.pr-comment == 'true' }}
       uses: actions/github-script@v9
       with:
         script: |
@@ -199,3 +209,11 @@ runs:
           await github.rest.issues.updateComment({
             owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: `${MARKER}\n${cancelledBlock}${logBlock}`,
           });
+
+    # A cancelled run must never leave a green required check behind.
+    - name: Fail cancelled run
+      if: ${{ steps.state.outputs.cancelled == 'true' }}
+      shell: bash
+      run: |
+        echo "::error::Code Scan run was cancelled"
+        exit 1

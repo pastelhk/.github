@@ -30,5 +30,11 @@ jobs:
       - name: Check package alignment
         run: npm run check:packages
 
+      # Callers resolve these through v1; a branch ref breaks every caller once the branch is deleted.
+      - name: Check org refs point at v1
+        run: |
+          bad=$(grep -rnE 'pastelhk/\.github/\.github/[^@ ]+@' .github/workflows .github/actions | grep -vE '@v1([^.0-9]|$)' | grep -v '^\.github/workflows/ci\.yml:' || true)
+          if [ -n "$bad" ]; then echo "::error::Org action refs must be @v1 before merge:"; echo "$bad"; exit 1; fi
+
       - name: Lint GitHub Actions
         uses: raven-actions/actionlint@v2
