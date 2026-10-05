@@ -85,7 +85,6 @@ jobs:
 
     permissions:
       contents: read
-      checks: write
       pull-requests: write
 
     # The action's own outcome wins: it says `skipped` for hoisting outside a workspace and for
